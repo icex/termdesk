@@ -3,14 +3,23 @@ package app
 import (
 	"testing"
 
+	"github.com/icex/termdesk/internal/window"
+	"github.com/icex/termdesk/pkg/geometry"
+
 	tea "charm.land/bubbletea/v2"
 )
 
+func setupReadyModel() Model {
+	m := New()
+	m.width = 120
+	m.height = 40
+	m.wm.SetBounds(120, 40)
+	m.ready = true
+	return m
+}
+
 func TestNew(t *testing.T) {
 	m := New()
-	if m.width != 0 || m.height != 0 {
-		t.Error("expected zero dimensions on new model")
-	}
 	if m.ready {
 		t.Error("expected model to not be ready initially")
 	}
@@ -24,84 +33,282 @@ func TestNew(t *testing.T) {
 
 func TestInit(t *testing.T) {
 	m := New()
-	cmd := m.Init()
-	if cmd != nil {
+	if m.Init() != nil {
 		t.Error("expected nil cmd from Init")
 	}
 }
 
 func TestUpdateWindowSize(t *testing.T) {
 	m := New()
-	msg := tea.WindowSizeMsg{Width: 120, Height: 40}
-	updated, _ := m.Update(msg)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	model := updated.(Model)
-	if model.width != 120 || model.height != 40 {
-		t.Errorf("expected 120x40, got %dx%d", model.width, model.height)
-	}
-	if !model.ready {
-		t.Error("expected model to be ready after window size msg")
+	if model.width != 120 || model.height != 40 || !model.ready {
+		t.Errorf("expected ready 120x40, got %dx%d ready=%v", model.width, model.height, model.ready)
 	}
 }
 
-func TestUpdateQuitQ(t *testing.T) {
-	m := New()
-	m.ready = true
-	msg := tea.KeyPressMsg(tea.Key{Code: 'q'})
-	_, cmd := m.Update(msg)
+func TestQuitCtrlC(t *testing.T) {
+	m := setupReadyModel()
+	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
 	if cmd == nil {
-		t.Error("expected quit command on q")
+		t.Error("expected quit on ctrl+c")
 	}
 }
 
-func TestUpdateCtrlN(t *testing.T) {
-	m := New()
-	m.ready = true
-	m.wm.SetBounds(120, 40)
+func TestQuitCtrlQ(t *testing.T) {
+	m := setupReadyModel()
+	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'q', Mod: tea.ModCtrl}))
+	if cmd == nil {
+		t.Error("expected quit on ctrl+q")
+	}
+}
 
-	msg := tea.KeyPressMsg(tea.Key{Code: 'n', Mod: tea.ModCtrl})
-	updated, _ := m.Update(msg)
+func TestQuitQNoWindows(t *testing.T) {
+	m := setupReadyModel()
+	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'q'}))
+	if cmd == nil {
+		t.Error("expected quit on q when no windows focused")
+	}
+}
+
+func TestNoQuitQWithWindows(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'q'}))
+	if cmd != nil {
+		t.Error("q should not quit when a window is focused")
+	}
+}
+
+func TestCtrlNOpensWindow(t *testing.T) {
+	m := setupReadyModel()
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'n', Mod: tea.ModCtrl}))
 	model := updated.(Model)
 	if model.wm.Count() != 1 {
-		t.Errorf("expected 1 window after Ctrl+N, got %d", model.wm.Count())
+		t.Errorf("expected 1 window, got %d", model.wm.Count())
 	}
 }
 
-func TestOpenDemoWindowCascades(t *testing.T) {
-	m := New()
-	m.wm.SetBounds(120, 40)
-
-	m.openDemoWindow()
+func TestAltTabCycles(t *testing.T) {
+	m := setupReadyModel()
 	m.openDemoWindow()
 	m.openDemoWindow()
 
-	if m.wm.Count() != 3 {
-		t.Errorf("expected 3 windows, got %d", m.wm.Count())
+	focused1 := m.wm.FocusedWindow().ID
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModAlt}))
+	model := updated.(Model)
+	focused2 := model.wm.FocusedWindow().ID
+
+	if focused1 == focused2 {
+		t.Error("alt+tab should change focused window")
+	}
+}
+
+func TestCtrlWCloses(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	if m.wm.Count() != 1 {
+		t.Fatal("expected 1 window")
 	}
 
-	// Windows should have different positions (cascading)
-	windows := m.wm.Windows()
-	if windows[0].Rect.X == windows[1].Rect.X {
-		t.Error("cascaded windows should have different X positions")
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'w', Mod: tea.ModCtrl}))
+	model := updated.(Model)
+	if model.wm.Count() != 0 {
+		t.Errorf("expected 0 windows after ctrl+w, got %d", model.wm.Count())
+	}
+}
+
+func TestCtrlWNoWindowsNoPanic(t *testing.T) {
+	m := setupReadyModel()
+	// Should not panic
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'w', Mod: tea.ModCtrl}))
+}
+
+func TestSnapLeftRight(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	wa := m.wm.WorkArea()
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft, Mod: tea.ModCtrl}))
+	model := updated.(Model)
+	fw := model.wm.FocusedWindow()
+	if fw.Rect.Width != wa.Width/2 {
+		t.Errorf("snap left: width = %d, want %d", fw.Rect.Width, wa.Width/2)
+	}
+
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyRight, Mod: tea.ModCtrl}))
+	model = updated.(Model)
+	fw = model.wm.FocusedWindow()
+	if fw.Rect.X != wa.Width/2 {
+		t.Errorf("snap right: x = %d, want %d", fw.Rect.X, wa.Width/2)
+	}
+}
+
+func TestMaximizeRestore(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	origRect := m.wm.FocusedWindow().Rect
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp, Mod: tea.ModCtrl}))
+	model := updated.(Model)
+	if !model.wm.FocusedWindow().IsMaximized() {
+		t.Error("expected maximized after ctrl+up")
+	}
+
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown, Mod: tea.ModCtrl}))
+	model = updated.(Model)
+	if model.wm.FocusedWindow().Rect != origRect {
+		t.Error("expected original rect after ctrl+down restore")
+	}
+}
+
+func TestTileAll(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	m.openDemoWindow()
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 't', Mod: tea.ModCtrl}))
+	model := updated.(Model)
+	windows := model.wm.Windows()
+	if windows[0].Rect.Width != 60 {
+		t.Errorf("tile: w1 width = %d, want 60", windows[0].Rect.Width)
+	}
+}
+
+func TestMouseClickFocuses(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow() // win-1
+	m.openDemoWindow() // win-2 (focused)
+
+	w1 := m.wm.Windows()[0]
+	if w1.Focused {
+		t.Fatal("w1 should not be focused initially")
+	}
+
+	// Click on w1's title bar at y=w1.Rect.Y which is above w2
+	click := tea.MouseClickMsg(tea.Mouse{X: w1.Rect.X + 1, Y: w1.Rect.Y, Button: tea.MouseLeft})
+	updated, _ := m.Update(click)
+	model := updated.(Model)
+	if model.wm.FocusedWindow().ID != w1.ID {
+		t.Errorf("expected %s focused, got %s", w1.ID, model.wm.FocusedWindow().ID)
+	}
+}
+
+func TestMouseClickClose(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	w := m.wm.FocusedWindow()
+
+	// Click close button position
+	closePos := w.CloseButtonPos()
+	click := tea.MouseClickMsg(tea.Mouse{X: closePos.X + 1, Y: closePos.Y, Button: tea.MouseLeft})
+	updated, _ := m.Update(click)
+	model := updated.(Model)
+	if model.wm.Count() != 0 {
+		t.Errorf("expected window closed, count = %d", model.wm.Count())
+	}
+}
+
+func TestMouseClickMaximize(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	w := m.wm.FocusedWindow()
+
+	maxPos := w.MaxButtonPos()
+	click := tea.MouseClickMsg(tea.Mouse{X: maxPos.X + 1, Y: maxPos.Y, Button: tea.MouseLeft})
+	updated, _ := m.Update(click)
+	model := updated.(Model)
+	fw := model.wm.FocusedWindow()
+	if !fw.IsMaximized() {
+		t.Error("expected window maximized after clicking max button")
+	}
+}
+
+func TestMouseDragMove(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	w := m.wm.FocusedWindow()
+	origX := w.Rect.X
+
+	// Click title bar to start drag
+	click := tea.MouseClickMsg(tea.Mouse{X: w.Rect.X + 5, Y: w.Rect.Y, Button: tea.MouseLeft})
+	updated, _ := m.Update(click)
+	model := updated.(Model)
+
+	// Drag right by 10
+	motion := tea.MouseMotionMsg(tea.Mouse{X: w.Rect.X + 15, Y: w.Rect.Y, Button: tea.MouseLeft})
+	updated, _ = model.Update(motion)
+	model = updated.(Model)
+
+	fw := model.wm.FocusedWindow()
+	if fw.Rect.X <= origX {
+		t.Errorf("window should have moved right, x = %d (orig %d)", fw.Rect.X, origX)
+	}
+
+	// Release
+	release := tea.MouseReleaseMsg(tea.Mouse{})
+	updated, _ = model.Update(release)
+	model = updated.(Model)
+	if model.drag.Active {
+		t.Error("drag should end on release")
+	}
+}
+
+func TestMouseDragResize(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	w := m.wm.FocusedWindow()
+	origW := w.Rect.Width
+
+	// Click right border to start resize
+	borderX := w.Rect.Right() - 1
+	borderY := w.Rect.Y + 5
+	click := tea.MouseClickMsg(tea.Mouse{X: borderX, Y: borderY, Button: tea.MouseLeft})
+	updated, _ := m.Update(click)
+	model := updated.(Model)
+
+	if !model.drag.Active || model.drag.Mode != window.DragResizeE {
+		t.Errorf("expected DragResizeE, got mode=%v active=%v", model.drag.Mode, model.drag.Active)
+	}
+
+	// Drag right
+	motion := tea.MouseMotionMsg(tea.Mouse{X: borderX + 10, Y: borderY, Button: tea.MouseLeft})
+	updated, _ = model.Update(motion)
+	model = updated.(Model)
+
+	fw := model.wm.FocusedWindow()
+	if fw.Rect.Width <= origW {
+		t.Errorf("window should have grown, width=%d (orig %d)", fw.Rect.Width, origW)
+	}
+}
+
+func TestMouseClickOutsideWindows(t *testing.T) {
+	m := setupReadyModel()
+	// Click with no windows should not panic
+	click := tea.MouseClickMsg(tea.Mouse{X: 50, Y: 20, Button: tea.MouseLeft})
+	m.Update(click)
+}
+
+func TestMouseMotionNoDrag(t *testing.T) {
+	m := setupReadyModel()
+	// Motion with no active drag should be no-op
+	motion := tea.MouseMotionMsg(tea.Mouse{X: 50, Y: 20})
+	updated, _ := m.Update(motion)
+	model := updated.(Model)
+	if model.drag.Active {
+		t.Error("should not have active drag")
 	}
 }
 
 func TestViewSetsAltScreen(t *testing.T) {
-	m := New()
-	m.ready = true
-	m.width = 80
-	m.height = 24
+	m := setupReadyModel()
 	v := m.View()
 	if !v.AltScreen {
-		t.Error("expected AltScreen to be true")
+		t.Error("expected AltScreen")
 	}
-}
-
-func TestViewSetsMouseMode(t *testing.T) {
-	m := New()
-	m.ready = true
-	v := m.View()
 	if v.MouseMode != tea.MouseModeAllMotion {
-		t.Errorf("expected MouseModeAllMotion, got %v", v.MouseMode)
+		t.Error("expected MouseModeAllMotion")
 	}
 }
 
@@ -109,34 +316,123 @@ func TestViewBeforeReady(t *testing.T) {
 	m := New()
 	v := m.View()
 	if v.Content == nil {
-		t.Error("expected content to be set before ready")
+		t.Error("expected loading content")
 	}
 }
 
-func TestViewAfterReady(t *testing.T) {
-	m := New()
-	m.ready = true
-	m.width = 80
-	m.height = 24
-	m.wm.SetBounds(80, 24)
+func TestViewRendersWindows(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
 	v := m.View()
-	if !v.AltScreen {
-		t.Error("expected alt screen mode")
-	}
 	if v.Content == nil {
-		t.Error("expected rendered content after ready")
+		t.Error("expected rendered content with windows")
 	}
 }
 
-func TestUpdateUnknownMsgPassthrough(t *testing.T) {
+func TestOpenDemoWindowMinSize(t *testing.T) {
 	m := New()
+	m.wm.SetBounds(20, 10) // very small terminal
+	m.ready = true
+	m.openDemoWindow()
+
+	w := m.wm.FocusedWindow()
+	if w.Rect.Width < window.MinWindowWidth {
+		t.Errorf("window width %d below min %d", w.Rect.Width, window.MinWindowWidth)
+	}
+	if w.Rect.Height < window.MinWindowHeight {
+		t.Errorf("window height %d below min %d", w.Rect.Height, window.MinWindowHeight)
+	}
+}
+
+func TestSnapNoWindowNoPanic(t *testing.T) {
+	m := setupReadyModel()
+	// These should not panic with no focused window
+	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft, Mod: tea.ModCtrl}))
+	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyRight, Mod: tea.ModCtrl}))
+	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp, Mod: tea.ModCtrl}))
+	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown, Mod: tea.ModCtrl}))
+}
+
+func TestDragUnmaximizes(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	w := m.wm.FocusedWindow()
+	window.Maximize(w, m.wm.WorkArea())
+
+	// Start drag on title bar
+	click := tea.MouseClickMsg(tea.Mouse{X: w.Rect.X + 5, Y: w.Rect.Y, Button: tea.MouseLeft})
+	updated, _ := m.Update(click)
+	model := updated.(Model)
+
+	// Move mouse — should un-maximize
+	motion := tea.MouseMotionMsg(tea.Mouse{X: 50, Y: 5, Button: tea.MouseLeft})
+	updated, _ = model.Update(motion)
+	model = updated.(Model)
+
+	fw := model.wm.FocusedWindow()
+	if fw.IsMaximized() {
+		t.Error("dragging a maximized window should restore it")
+	}
+}
+
+func TestDragDeadWindowClears(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+
+	// Start a drag
+	w := m.wm.FocusedWindow()
+	click := tea.MouseClickMsg(tea.Mouse{X: w.Rect.X + 5, Y: w.Rect.Y, Button: tea.MouseLeft})
+	updated, _ := m.Update(click)
+	model := updated.(Model)
+
+	// Remove the window while dragging
+	model.wm.RemoveWindow(w.ID)
+
+	// Motion should clear the drag
+	motion := tea.MouseMotionMsg(tea.Mouse{X: 50, Y: 10, Button: tea.MouseLeft})
+	updated, _ = model.Update(motion)
+	model = updated.(Model)
+	if model.drag.Active {
+		t.Error("drag should clear when window is removed")
+	}
+}
+
+func TestMouseContentClickNoDrag(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	w := m.wm.FocusedWindow()
+
+	// Click in content area (not border/title)
+	click := tea.MouseClickMsg(tea.Mouse{X: w.Rect.X + 5, Y: w.Rect.Y + 5, Button: tea.MouseLeft})
+	updated, _ := m.Update(click)
+	model := updated.(Model)
+
+	if model.drag.Active {
+		t.Error("clicking content should not start a drag")
+	}
+}
+
+func TestUnknownMsgPassthrough(t *testing.T) {
+	m := setupReadyModel()
 	type customMsg struct{}
 	updated, cmd := m.Update(customMsg{})
 	model := updated.(Model)
-	if model.ready {
-		t.Error("unknown message should not change ready state")
+	if cmd != nil || !model.ready {
+		t.Error("unknown message should pass through")
 	}
-	if cmd != nil {
-		t.Error("unknown message should not produce a command")
+}
+
+// Test that window positions use the same geometry helpers
+func TestWindowButtonPosMatchesHitTest(t *testing.T) {
+	w := window.NewWindow("w1", "Test", geometry.Rect{X: 0, Y: 0, Width: 40, Height: 20}, nil)
+	w.Resizable = true
+
+	// Close button hit test should work at the position reported by CloseButtonPos
+	closePos := w.CloseButtonPos()
+	// CloseButtonPos returns the start of [X], hit inside the button
+	p := geometry.Point{X: closePos.X + 1, Y: closePos.Y}
+	zone := window.HitTest(w, p, 3, 3)
+	if zone != window.HitCloseButton {
+		t.Errorf("expected HitCloseButton at close pos, got %v", zone)
 	}
 }

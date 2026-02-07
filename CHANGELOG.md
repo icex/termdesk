@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-02-07
+
+### Added
+- Mouse support: click to focus windows, drag title bar to move, drag borders/corners to resize
+- Hit testing for window zones: title bar, close/maximize buttons, borders, corners, content
+- Drag state machine with 9 resize modes (N/S/E/W/NE/NW/SE/SW) and move
+- Minimum window size enforcement during drag (12×4)
+- Close button click removes window, maximize button toggles maximize/restore
+- Dragging a maximized window auto-restores it
+- Keyboard window management: Ctrl+Left/Right snap, Ctrl+Up maximize, Ctrl+Down restore
+- Alt+Tab / Alt+Shift+Tab to cycle between windows
+- Ctrl+W to close focused window, Ctrl+T to tile all windows
+- Window tiling: SnapLeft, SnapRight, Maximize, Restore, ToggleMaximize, TileAll (grid layout)
+- Stale drag cleanup when window removed mid-drag
+
 ## [0.3.0] - 2026-02-07
 
 ### Added

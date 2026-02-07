@@ -91,6 +91,21 @@ func (t *Terminal) Render() string {
 	return t.emu.Render()
 }
 
+// CellAt returns the VT emulator cell at the given position.
+func (t *Terminal) CellAt(x, y int) *uv.Cell {
+	return t.emu.CellAt(x, y)
+}
+
+// Width returns the emulator's column count.
+func (t *Terminal) Width() int {
+	return t.emu.Width()
+}
+
+// Height returns the emulator's row count.
+func (t *Terminal) Height() int {
+	return t.emu.Height()
+}
+
 // Resize updates the terminal and PTY dimensions.
 func (t *Terminal) Resize(cols, rows int) {
 	t.mu.Lock()

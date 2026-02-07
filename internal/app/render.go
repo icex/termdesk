@@ -1,6 +1,8 @@
 package app
 
 import (
+	"fmt"
+	"image/color"
 	"strings"
 	"unicode/utf8"
 
@@ -20,10 +22,23 @@ func runeLen(s string) int {
 
 // Cell represents a single terminal cell with character and style.
 type Cell struct {
-	Char rune
-	Fg   string // foreground color hex
-	Bg   string // background color hex
+	Char  rune
+	Fg    color.Color // nil = default
+	Bg    color.Color // nil = default
+	Attrs uint8       // text attributes (bold, italic, etc.)
 }
+
+// Text attribute constants matching ultraviolet.
+const (
+	AttrBold          = 1 << iota
+	AttrFaint
+	AttrItalic
+	AttrBlink
+	AttrRapidBlink
+	AttrReverse
+	AttrConceal
+	AttrStrikethrough
+)
 
 // Buffer is a 2D grid of cells representing the terminal screen.
 type Buffer struct {
@@ -32,22 +47,44 @@ type Buffer struct {
 	Cells  [][]Cell
 }
 
+// hexToColor converts a "#RRGGBB" hex string to color.Color.
+func hexToColor(hex string) color.Color {
+	if hex == "" {
+		return nil
+	}
+	if len(hex) == 7 && hex[0] == '#' {
+		var r, g, b uint8
+		fmt.Sscanf(hex[1:], "%02x%02x%02x", &r, &g, &b)
+		return color.RGBA{R: r, G: g, B: b, A: 255}
+	}
+	return nil
+}
+
 // NewBuffer creates a buffer filled with spaces and the desktop background.
 func NewBuffer(width, height int, bgColor string) *Buffer {
+	bg := hexToColor(bgColor)
 	cells := make([][]Cell, height)
 	for y := range cells {
 		cells[y] = make([]Cell, width)
 		for x := range cells[y] {
-			cells[y][x] = Cell{Char: ' ', Bg: bgColor}
+			cells[y][x] = Cell{Char: ' ', Bg: bg}
 		}
 	}
 	return &Buffer{Width: width, Height: height, Cells: cells}
 }
 
 // Set sets a cell at the given position if it's within bounds.
+// fg and bg are hex color strings like "#RRGGBB", or "" for default.
 func (b *Buffer) Set(x, y int, char rune, fg, bg string) {
 	if x >= 0 && x < b.Width && y >= 0 && y < b.Height {
-		b.Cells[y][x] = Cell{Char: char, Fg: fg, Bg: bg}
+		b.Cells[y][x] = Cell{Char: char, Fg: hexToColor(fg), Bg: hexToColor(bg)}
+	}
+}
+
+// SetCell sets a cell at the given position with color.Color values directly.
+func (b *Buffer) SetCell(x, y int, char rune, fg, bg color.Color, attrs uint8) {
+	if x >= 0 && x < b.Width && y >= 0 && y < b.Height {
+		b.Cells[y][x] = Cell{Char: char, Fg: fg, Bg: bg, Attrs: attrs}
 	}
 }
 
@@ -156,21 +193,25 @@ func RenderWindow(buf *Buffer, w *window.Window, theme config.Theme, term *termi
 	}
 }
 
-// renderTerminalContent copies the VT emulator screen into the buffer.
+// renderTerminalContent copies the VT emulator screen into the buffer using per-cell access.
 func renderTerminalContent(buf *Buffer, area geometry.Rect, term *terminal.Terminal) {
 	if term == nil {
 		return
 	}
-	output := term.Render()
-	lines := strings.Split(output, "\n")
-	for dy := 0; dy < area.Height && dy < len(lines); dy++ {
-		col := 0
-		for _, ch := range stripANSI(lines[dy]) {
-			if col >= area.Width {
-				break
+	termW := term.Width()
+	termH := term.Height()
+	for dy := 0; dy < area.Height && dy < termH; dy++ {
+		for dx := 0; dx < area.Width && dx < termW; dx++ {
+			cell := term.CellAt(dx, dy)
+			if cell == nil {
+				continue
 			}
-			buf.Set(area.X+col, area.Y+dy, ch, "", "")
-			col++
+			ch := ' '
+			if cell.Content != "" {
+				runes := []rune(cell.Content)
+				ch = runes[0]
+			}
+			buf.SetCell(area.X+dx, area.Y+dy, ch, cell.Style.Fg, cell.Style.Bg, cell.Style.Attrs)
 		}
 	}
 }
@@ -342,18 +383,113 @@ func RenderLauncher(buf *Buffer, l *launcher.Launcher, theme config.Theme) {
 	}
 }
 
-// BufferToString converts the cell buffer to a plain string (without ANSI colors).
-// Used for initial rendering; color support will be added with Lipgloss integration.
+// colorToANSIFg returns an ANSI foreground escape sequence for a color.Color.
+func colorToANSIFg(c color.Color) string {
+	if c == nil {
+		return ""
+	}
+	r, g, b, _ := c.RGBA()
+	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r>>8, g>>8, b>>8)
+}
+
+// colorToANSIBg returns an ANSI background escape sequence for a color.Color.
+func colorToANSIBg(c color.Color) string {
+	if c == nil {
+		return ""
+	}
+	r, g, b, _ := c.RGBA()
+	return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r>>8, g>>8, b>>8)
+}
+
+// attrsToANSI returns ANSI SGR sequences for text attributes.
+func attrsToANSI(attrs uint8) string {
+	if attrs == 0 {
+		return ""
+	}
+	var parts []string
+	if attrs&AttrBold != 0 {
+		parts = append(parts, "1")
+	}
+	if attrs&AttrFaint != 0 {
+		parts = append(parts, "2")
+	}
+	if attrs&AttrItalic != 0 {
+		parts = append(parts, "3")
+	}
+	if attrs&AttrBlink != 0 {
+		parts = append(parts, "5")
+	}
+	if attrs&AttrReverse != 0 {
+		parts = append(parts, "7")
+	}
+	if attrs&AttrConceal != 0 {
+		parts = append(parts, "8")
+	}
+	if attrs&AttrStrikethrough != 0 {
+		parts = append(parts, "9")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "\x1b[" + strings.Join(parts, ";") + "m"
+}
+
+// colorsEqual compares two color.Color values for equality.
+func colorsEqual(a, b color.Color) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	r1, g1, b1, a1 := a.RGBA()
+	r2, g2, b2, a2 := b.RGBA()
+	return r1 == r2 && g1 == g2 && b1 == b2 && a1 == a2
+}
+
+// BufferToString converts the cell buffer to an ANSI-colored string.
 func BufferToString(buf *Buffer) string {
 	var sb strings.Builder
-	sb.Grow(buf.Width * buf.Height * 2)
+	sb.Grow(buf.Width * buf.Height * 10) // generous for ANSI sequences
+
+	var prevFg, prevBg color.Color
+	var prevAttrs uint8
+
 	for y := 0; y < buf.Height; y++ {
 		for x := 0; x < buf.Width; x++ {
-			sb.WriteRune(buf.Cells[y][x].Char)
+			cell := buf.Cells[y][x]
+
+			// Emit color change sequences only when colors differ
+			fgChanged := !colorsEqual(cell.Fg, prevFg)
+			bgChanged := !colorsEqual(cell.Bg, prevBg)
+			attrsChanged := cell.Attrs != prevAttrs
+
+			if fgChanged || bgChanged || attrsChanged {
+				sb.WriteString("\x1b[0m") // reset
+				if cell.Attrs != 0 {
+					sb.WriteString(attrsToANSI(cell.Attrs))
+				}
+				if cell.Fg != nil {
+					sb.WriteString(colorToANSIFg(cell.Fg))
+				}
+				if cell.Bg != nil {
+					sb.WriteString(colorToANSIBg(cell.Bg))
+				}
+				prevFg = cell.Fg
+				prevBg = cell.Bg
+				prevAttrs = cell.Attrs
+			}
+
+			sb.WriteRune(cell.Char)
 		}
 		if y < buf.Height-1 {
+			sb.WriteString("\x1b[0m") // reset at end of line
 			sb.WriteByte('\n')
+			prevFg = nil
+			prevBg = nil
+			prevAttrs = 0
 		}
 	}
+	sb.WriteString("\x1b[0m") // final reset
 	return sb.String()
 }

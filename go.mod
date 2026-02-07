@@ -1,4 +1,4 @@
-module github.com/bogdan/termdesk
+module github.com/icex/termdesk
 
 go 1.25.7
 

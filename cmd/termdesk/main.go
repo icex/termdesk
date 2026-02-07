@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/bogdan/termdesk/internal/app"
+	"github.com/icex/termdesk/internal/app"
 
 	tea "charm.land/bubbletea/v2"
 )

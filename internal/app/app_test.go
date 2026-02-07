@@ -14,7 +14,7 @@ func setupReadyModel() Model {
 	m.width = 120
 	m.height = 40
 	m.wm.SetBounds(120, 40)
-	m.wm.SetReserved(1, 0) // menu bar at top
+	m.wm.SetReserved(1, 1) // menu bar at top, dock at bottom
 	m.menuBar.SetWidth(120)
 	m.ready = true
 	return m

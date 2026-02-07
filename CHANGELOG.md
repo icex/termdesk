@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0] - 2026-02-07
+
+### Added
+- Bottom dock bar with Nerd Font icons: Terminal, nvim, Files, Calc
+- Dock items centered with │ separators
+- Mouse hover highlighting on dock items (bracket indicator)
+- Click dock items to launch terminal windows
+- Reserved bottom row for dock (windows can't overlap)
+
 ## [0.6.0] - 2026-02-07
 
 ### Added

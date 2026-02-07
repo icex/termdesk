@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/icex/termdesk/internal/config"
+	"github.com/icex/termdesk/internal/dock"
 	"github.com/icex/termdesk/internal/menubar"
 	"github.com/icex/termdesk/internal/terminal"
 	"github.com/icex/termdesk/internal/window"
@@ -26,6 +27,7 @@ type Model struct {
 	nextWID   int
 	terminals map[string]*terminal.Terminal
 	menuBar   *menubar.MenuBar
+	dock      *dock.Dock
 }
 
 // New creates a new root Model.
@@ -35,6 +37,7 @@ func New() Model {
 		theme:     config.RetroTheme(),
 		terminals: make(map[string]*terminal.Terminal),
 		menuBar:   menubar.New(80),
+		dock:      dock.New(80),
 	}
 }
 
@@ -48,8 +51,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.wm.SetBounds(msg.Width, msg.Height)
-		m.wm.SetReserved(1, 0) // 1 row for menu bar at top
+		m.wm.SetReserved(1, 1) // 1 row for menu bar at top, 1 for dock at bottom
 		m.menuBar.SetWidth(msg.Width)
+		m.dock.SetWidth(msg.Width)
 		m.ready = true
 		m.resizeAllTerminals()
 
@@ -203,6 +207,16 @@ func (m Model) executeMenuAction(action string) (tea.Model, tea.Cmd) {
 func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	p := geometry.Point{X: mouse.X, Y: mouse.Y}
 
+	// Check if click is on dock (bottom row)
+	if mouse.Y == m.height-1 {
+		idx := m.dock.ItemAtX(mouse.X)
+		if idx >= 0 {
+			cmd := m.openTerminalWindow()
+			return m, cmd
+		}
+		return m, nil
+	}
+
 	// Check if click is on menu bar (y=0)
 	if mouse.Y == 0 {
 		idx := m.menuBar.MenuAtX(mouse.X)
@@ -287,6 +301,13 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleMouseMotion(mouse tea.Mouse) (tea.Model, tea.Cmd) {
+	// Update dock hover
+	if mouse.Y == m.height-1 {
+		m.dock.SetHover(m.dock.ItemAtX(mouse.X))
+	} else {
+		m.dock.SetHover(-1)
+	}
+
 	if !m.drag.Active {
 		return m, nil
 	}
@@ -450,6 +471,7 @@ func (m Model) View() tea.View {
 
 	buf := RenderFrame(m.wm, m.theme, m.terminals)
 	RenderMenuBar(buf, m.menuBar, m.theme)
+	RenderDock(buf, m.dock, m.theme)
 	v.SetContent(BufferToString(buf))
 	return v
 }

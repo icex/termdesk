@@ -5,6 +5,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/icex/termdesk/internal/config"
+	"github.com/icex/termdesk/internal/dock"
 	"github.com/icex/termdesk/internal/menubar"
 	"github.com/icex/termdesk/internal/terminal"
 	"github.com/icex/termdesk/internal/window"
@@ -281,6 +282,28 @@ func RenderMenuBar(buf *Buffer, mb *menubar.MenuBar, theme config.Theme) {
 				dcol++
 			}
 		}
+	}
+}
+
+// RenderDock draws the dock at the bottom of the buffer.
+func RenderDock(buf *Buffer, d *dock.Dock, theme config.Theme) {
+	if d == nil || buf.Height < 2 {
+		return
+	}
+
+	y := buf.Height - 1
+
+	// Fill dock row
+	for x := 0; x < buf.Width; x++ {
+		buf.Set(x, y, ' ', theme.ActiveTitleFg, theme.ActiveTitleBg)
+	}
+
+	// Render dock text
+	dockText := d.Render(buf.Width)
+	col := 0
+	for _, ch := range dockText {
+		buf.Set(col, y, ch, theme.ActiveTitleFg, theme.ActiveTitleBg)
+		col++
 	}
 }
 

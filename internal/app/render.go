@@ -5,6 +5,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/icex/termdesk/internal/config"
+	"github.com/icex/termdesk/internal/terminal"
 	"github.com/icex/termdesk/internal/window"
 	"github.com/icex/termdesk/pkg/geometry"
 )
@@ -66,7 +67,7 @@ func (b *Buffer) FillRect(r geometry.Rect, char rune, fg, bg string) {
 }
 
 // RenderWindow draws a single window (border + title bar + content) into the buffer.
-func RenderWindow(buf *Buffer, w *window.Window, theme config.Theme) {
+func RenderWindow(buf *Buffer, w *window.Window, theme config.Theme, term *terminal.Terminal) {
 	if !w.Visible || w.Minimized {
 		return
 	}
@@ -145,11 +146,88 @@ func RenderWindow(buf *Buffer, w *window.Window, theme config.Theme) {
 		buf.Set(r.X, y, theme.BorderVertical, borderFg, borderBg)
 		buf.Set(r.Right()-1, y, theme.BorderVertical, borderFg, borderBg)
 	}
+
+	// Draw terminal content if present
+	if term != nil {
+		renderTerminalContent(buf, contentRect, term)
+	}
+}
+
+// renderTerminalContent copies the VT emulator screen into the buffer.
+func renderTerminalContent(buf *Buffer, area geometry.Rect, term *terminal.Terminal) {
+	if term == nil {
+		return
+	}
+	output := term.Render()
+	lines := strings.Split(output, "\n")
+	for dy := 0; dy < area.Height && dy < len(lines); dy++ {
+		col := 0
+		for _, ch := range stripANSI(lines[dy]) {
+			if col >= area.Width {
+				break
+			}
+			buf.Set(area.X+col, area.Y+dy, ch, "", "")
+			col++
+		}
+	}
+}
+
+// stripANSI removes ANSI escape sequences from a string, returning runes.
+func stripANSI(s string) []rune {
+	var result []rune
+	i := 0
+	runes := []rune(s)
+	for i < len(runes) {
+		if runes[i] == '\x1b' && i+1 < len(runes) {
+			i++ // skip ESC
+			switch {
+			case runes[i] == '[':
+				// CSI sequence: ESC [ ... final byte (0x40-0x7E)
+				i++
+				for i < len(runes) && runes[i] < 0x40 || runes[i] > 0x7E {
+					if runes[i] >= 0x40 && runes[i] <= 0x7E {
+						break
+					}
+					i++
+				}
+				if i < len(runes) {
+					i++ // skip final byte
+				}
+			case runes[i] == ']':
+				// OSC sequence: ESC ] ... ST or BEL
+				i++
+				for i < len(runes) {
+					if runes[i] == '\x07' { // BEL
+						i++
+						break
+					}
+					if runes[i] == '\x1b' && i+1 < len(runes) && runes[i+1] == '\\' { // ST
+						i += 2
+						break
+					}
+					i++
+				}
+			default:
+				// Other ESC sequences (e.g., ESC ( B for charset):
+				// skip intermediate bytes (0x20-0x2F) then final byte (0x30-0x7E)
+				for i < len(runes) && runes[i] >= 0x20 && runes[i] <= 0x2F {
+					i++
+				}
+				if i < len(runes) {
+					i++ // skip final byte
+				}
+			}
+		} else {
+			result = append(result, runes[i])
+			i++
+		}
+	}
+	return result
 }
 
 // RenderFrame composites all windows using the painter's algorithm.
 // Windows are drawn back-to-front in z-order.
-func RenderFrame(wm *window.Manager, theme config.Theme) *Buffer {
+func RenderFrame(wm *window.Manager, theme config.Theme, terminals map[string]*terminal.Terminal) *Buffer {
 	wa := wm.WorkArea()
 	// Use full bounds for the buffer
 	bounds := geometry.Rect{X: 0, Y: 0, Width: wa.Width, Height: wa.Height + wa.Y}
@@ -161,7 +239,11 @@ func RenderFrame(wm *window.Manager, theme config.Theme) *Buffer {
 
 	// Draw windows back-to-front (painter's algorithm)
 	for _, w := range wm.Windows() {
-		RenderWindow(buf, w, theme)
+		var term *terminal.Terminal
+		if terminals != nil {
+			term = terminals[w.ID]
+		}
+		RenderWindow(buf, w, theme, term)
 	}
 
 	return buf

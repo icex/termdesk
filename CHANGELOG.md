@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-02-07
+
+### Added
+- PTY terminal windows: Ctrl+N opens a real shell (zsh/sh) inside a window
+- VT100/ANSI terminal emulation via charmbracelet/x/vt SafeEmulator
+- Full keyboard input forwarding to PTY (printable chars, Ctrl combos, arrows, function keys)
+- Terminal resize propagation when windows are snapped, maximized, tiled, or dragged
+- ANSI escape sequence stripping for terminal content rendering
+- Terminal cleanup on window close and application quit
+- PTY read loop with async message passing
+
 ## [0.4.0] - 2026-02-07
 
 ### Added

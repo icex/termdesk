@@ -3,8 +3,10 @@ package app
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/icex/termdesk/internal/config"
+	"github.com/icex/termdesk/internal/terminal"
 	"github.com/icex/termdesk/internal/window"
 	"github.com/icex/termdesk/pkg/geometry"
 )
@@ -92,7 +94,7 @@ func TestRenderWindowBasic(t *testing.T) {
 	w := window.NewWindow("w1", "Test", geometry.Rect{X: 0, Y: 0, Width: 20, Height: 8}, nil)
 	w.Focused = true
 
-	RenderWindow(buf, w, theme)
+	RenderWindow(buf, w, theme, nil)
 
 	// Check corners
 	if buf.Cells[0][0].Char != theme.BorderTopLeft {
@@ -123,7 +125,7 @@ func TestRenderWindowSkipsMinimized(t *testing.T) {
 	w := window.NewWindow("w1", "Test", geometry.Rect{X: 0, Y: 0, Width: 20, Height: 8}, nil)
 	w.Minimized = true
 
-	RenderWindow(buf, w, theme)
+	RenderWindow(buf, w, theme, nil)
 
 	// Should not have drawn anything
 	if buf.Cells[0][0].Char != ' ' {
@@ -137,7 +139,7 @@ func TestRenderWindowSkipsInvisible(t *testing.T) {
 	w := window.NewWindow("w1", "Test", geometry.Rect{X: 0, Y: 0, Width: 20, Height: 8}, nil)
 	w.Visible = false
 
-	RenderWindow(buf, w, theme)
+	RenderWindow(buf, w, theme, nil)
 
 	if buf.Cells[0][0].Char != ' ' {
 		t.Error("invisible window should not be rendered")
@@ -149,7 +151,7 @@ func TestRenderWindowTooSmall(t *testing.T) {
 	buf := NewBuffer(10, 5, theme.DesktopBg)
 	w := window.NewWindow("w1", "Test", geometry.Rect{X: 0, Y: 0, Width: 2, Height: 2}, nil)
 
-	RenderWindow(buf, w, theme)
+	RenderWindow(buf, w, theme, nil)
 
 	// Too small to render, should be no-op
 	if buf.Cells[0][0].Char != ' ' {
@@ -163,7 +165,7 @@ func TestRenderWindowTitleTruncation(t *testing.T) {
 	w := window.NewWindow("w1", "This is a very long window title that should be truncated", geometry.Rect{X: 0, Y: 0, Width: 20, Height: 5}, nil)
 	w.Focused = true
 
-	RenderWindow(buf, w, theme)
+	RenderWindow(buf, w, theme, nil)
 
 	// Title should be present but truncated with "..."
 	row := buf.Cells[0]
@@ -186,13 +188,13 @@ func TestRenderWindowActiveInactiveColors(t *testing.T) {
 
 	w := window.NewWindow("w1", "Test", geometry.Rect{X: 0, Y: 0, Width: 20, Height: 8}, nil)
 	w.Focused = true
-	RenderWindow(buf, w, theme)
+	RenderWindow(buf, w, theme, nil)
 	activeBg := buf.Cells[0][0].Bg
 
 	buf2 := NewBuffer(30, 10, theme.DesktopBg)
 	w2 := window.NewWindow("w2", "Test", geometry.Rect{X: 0, Y: 0, Width: 20, Height: 8}, nil)
 	w2.Focused = false
-	RenderWindow(buf2, w2, theme)
+	RenderWindow(buf2, w2, theme, nil)
 	inactiveBg := buf2.Cells[0][0].Bg
 
 	// Colors should differ
@@ -204,7 +206,7 @@ func TestRenderWindowActiveInactiveColors(t *testing.T) {
 func TestRenderFrameEmpty(t *testing.T) {
 	theme := testTheme()
 	wm := window.NewManager(40, 20)
-	buf := RenderFrame(wm, theme)
+	buf := RenderFrame(wm, theme, nil)
 
 	if buf.Width != 40 || buf.Height != 20 {
 		t.Errorf("buffer dimensions = %dx%d, want 40x20", buf.Width, buf.Height)
@@ -228,7 +230,7 @@ func TestRenderFrameWithWindows(t *testing.T) {
 	wm.AddWindow(w1)
 	wm.AddWindow(w2)
 
-	buf := RenderFrame(wm, theme)
+	buf := RenderFrame(wm, theme, nil)
 
 	// In the overlap area, w2 (front) should be visible
 	// w2 starts at (10,5), so (10,5) should be w2's top-left corner
@@ -245,7 +247,7 @@ func TestRenderFrameWithWindows(t *testing.T) {
 func TestRenderFrameZeroBounds(t *testing.T) {
 	theme := testTheme()
 	wm := window.NewManager(0, 0)
-	buf := RenderFrame(wm, theme)
+	buf := RenderFrame(wm, theme, nil)
 	if buf.Width != 1 || buf.Height != 1 {
 		t.Errorf("zero bounds buffer = %dx%d, want 1x1", buf.Width, buf.Height)
 	}
@@ -275,7 +277,7 @@ func TestRenderWindowCloseButton(t *testing.T) {
 	w := window.NewWindow("w1", "Test", geometry.Rect{X: 0, Y: 0, Width: 20, Height: 8}, nil)
 	w.Focused = true
 
-	RenderWindow(buf, w, theme)
+	RenderWindow(buf, w, theme, nil)
 
 	// Close button [X] should be at right side of title bar
 	// For a 20-wide window, close button at x=17,18,19 area
@@ -297,7 +299,7 @@ func TestRenderWindowMaxButton(t *testing.T) {
 	w.Focused = true
 	w.Resizable = true
 
-	RenderWindow(buf, w, theme)
+	RenderWindow(buf, w, theme, nil)
 
 	row := buf.Cells[0]
 	var titleStr strings.Builder
@@ -319,7 +321,7 @@ func TestRenderWindowRestoreButton(t *testing.T) {
 	prevRect := geometry.Rect{X: 5, Y: 5, Width: 10, Height: 5}
 	w.PreMaxRect = &prevRect
 
-	RenderWindow(buf, w, theme)
+	RenderWindow(buf, w, theme, nil)
 
 	row := buf.Cells[0]
 	var titleStr strings.Builder
@@ -329,5 +331,110 @@ func TestRenderWindowRestoreButton(t *testing.T) {
 	rendered := titleStr.String()
 	if !strings.Contains(rendered, "[◫]") {
 		t.Errorf("title bar = %q, expected [◫] restore button when maximized", rendered)
+	}
+}
+
+func TestStripANSI(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"plain text", "hello", "hello"},
+		{"empty", "", ""},
+		{"CSI color", "\x1b[31mred\x1b[0m", "red"},
+		{"CSI bold", "\x1b[1mbold\x1b[22m", "bold"},
+		{"CSI cursor", "\x1b[2;5H", ""},
+		{"OSC title BEL", "\x1b]0;title\x07text", "text"},
+		{"OSC title ST", "\x1b]0;title\x1b\\text", "text"},
+		{"mixed", "\x1b[32mgreen\x1b[0m plain \x1b[1;34mblue\x1b[0m", "green plain blue"},
+		{"ESC other", "\x1b(B text", " text"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := string(stripANSI(tt.input))
+			if got != tt.want {
+				t.Errorf("stripANSI(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderTerminalContentNil(t *testing.T) {
+	buf := NewBuffer(20, 10, "#000")
+	area := geometry.Rect{X: 1, Y: 1, Width: 10, Height: 3}
+
+	// nil terminal should be no-op
+	renderTerminalContent(buf, area, nil)
+	if buf.Cells[1][1].Char != ' ' {
+		t.Error("nil terminal should not change buffer")
+	}
+}
+
+func TestRenderTerminalContentWithTerminal(t *testing.T) {
+	term, err := terminal.New("/bin/echo", []string{"HELLO"}, 20, 5)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer term.Close()
+
+	// Read PTY output
+	done := make(chan struct{})
+	go func() {
+		term.ReadPtyLoop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+	}
+
+	buf := NewBuffer(30, 10, "#000")
+	area := geometry.Rect{X: 1, Y: 1, Width: 20, Height: 5}
+	renderTerminalContent(buf, area, term)
+
+	// Check that "HELLO" was rendered somewhere in the content area
+	var found bool
+	for y := area.Y; y < area.Y+area.Height; y++ {
+		for x := area.X; x < area.X+area.Width; x++ {
+			if buf.Cells[y][x].Char == 'H' {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Error("expected terminal content to contain 'H' from echo HELLO")
+	}
+}
+
+func TestRenderWindowWithTerminal(t *testing.T) {
+	term, err := terminal.New("/bin/echo", []string{"TEST"}, 18, 6)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer term.Close()
+
+	done := make(chan struct{})
+	go func() {
+		term.ReadPtyLoop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+	}
+
+	theme := testTheme()
+	buf := NewBuffer(30, 10, theme.DesktopBg)
+	w := window.NewWindow("w1", "Term", geometry.Rect{X: 0, Y: 0, Width: 20, Height: 8}, nil)
+	w.Focused = true
+
+	RenderWindow(buf, w, theme, term)
+
+	// Should have both borders and terminal content
+	if buf.Cells[0][0].Char != theme.BorderTopLeft {
+		t.Error("expected border")
 	}
 }

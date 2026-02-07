@@ -1,0 +1,96 @@
+[general]
+shell = "/bin/zsh"
+data_dir = "~/.termdesk"
+
+[theme]
+name = "retro"  # "retro" | "modern"
+
+[menubar]
+show_clock = true
+clock_format = "03:04 PM"
+show_cpu = true
+show_memory = true
+show_battery = false
+
+[dock]
+position = "bottom"  # "bottom" | "left" | "right"
+auto_hide = false
+
+[[dock.items]]
+icon = ""
+label = "Terminal"
+command = "$SHELL"
+
+[[dock.items]]
+icon = ""
+label = "nvim"
+command = "nvim"
+
+[[dock.items]]
+icon = ""
+label = "Files"
+command = "spf"
+
+[[dock.items]]
+icon = ""
+label = "Calc"
+command = "_builtin:calculator"
+
+[[dock.items]]
+icon = ""
+label = "Tetris"
+command = "tetrigo"
+
+[[dock.items]]
+icon = "󱜙"
+label = "Claude"
+command = "claude"
+
+[keybindings]
+new_terminal = "ctrl+n"
+cycle_forward = "alt+tab"
+cycle_backward = "alt+shift+tab"
+snap_left = "ctrl+left"
+snap_right = "ctrl+right"
+maximize = "ctrl+up"
+restore = "ctrl+down"
+close_window = "ctrl+w"
+launcher = "ctrl+space"
+clipboard_history = "ctrl+shift+v"
+quit = "ctrl+q"
+
+[windows]
+default_width = 80
+default_height = 24
+min_width = 10
+min_height = 3
+
+[[apps]]
+name = "Terminal"
+icon = ""
+command = "$SHELL"
+category = "System"
+
+[[apps]]
+name = "Neovim"
+icon = ""
+command = "nvim"
+category = "Development"
+
+[[apps]]
+name = "File Manager"
+icon = ""
+command = "spf"
+category = "System"
+
+[[apps]]
+name = "Claude Code"
+icon = "󱜙"
+command = "claude"
+category = "Development"
+
+[[apps]]
+name = "Tetris"
+icon = ""
+command = "tetrigo"
+category = "Games"

@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.1] - 2026-02-07
+
+### Fixed
+- Terminal responsiveness: replaced blocking PTY read loop with event-driven ReadOnce chain
+- Exit command now closes window: PtyClosedMsg handler removes the window
+- Buffer height includes dock row (was missing 1 row)
+- Optimized ANSI color output with direct string building (no fmt.Sprintf per cell)
+
 ## [0.8.0] - 2026-02-07
 
 ### Added

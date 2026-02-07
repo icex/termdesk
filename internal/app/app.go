@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/icex/termdesk/internal/config"
 	"github.com/icex/termdesk/internal/dock"
@@ -73,11 +72,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouseRelease()
 
 	case PtyOutputMsg:
-		// PTY produced output — schedule a redraw and continue reading
-		return m, m.schedulePtyRead(msg.WindowID)
+		// PTY produced output — schedule another read
+		return m, m.readPtyOnce(msg.WindowID)
 
 	case PtyClosedMsg:
-		// PTY exited — optionally close the window
+		// PTY exited — close the window
+		m.closeTerminal(msg.WindowID)
+		m.wm.RemoveWindow(msg.WindowID)
 		return m, nil
 	}
 
@@ -458,8 +459,8 @@ func (m *Model) openTerminalWindowWith(command string, args []string) tea.Cmd {
 
 	m.terminals[id] = term
 
-	// Start reading PTY output in background
-	return m.startPtyReader(id, term)
+	// Kick off the first PTY read — this starts the event-driven read chain
+	return m.readPtyOnce(id)
 }
 
 // openDemoWindow creates a demo window without a terminal (for testing).
@@ -485,20 +486,21 @@ func (m *Model) openDemoWindow() {
 	m.wm.AddWindow(win)
 }
 
-// startPtyReader returns a Cmd that reads PTY output and sends messages.
-func (m *Model) startPtyReader(windowID string, term *terminal.Terminal) tea.Cmd {
-	return func() tea.Msg {
-		err := term.ReadPtyLoop()
-		return PtyClosedMsg{WindowID: windowID, Err: err}
+// readPtyOnce returns a Cmd that reads one chunk from the PTY.
+// On success, it returns PtyOutputMsg to trigger a re-render and schedule the next read.
+// On EOF/error, it returns PtyClosedMsg to close the window.
+func (m *Model) readPtyOnce(windowID string) tea.Cmd {
+	term, ok := m.terminals[windowID]
+	if !ok {
+		return nil
 	}
-}
-
-// schedulePtyRead returns a Cmd for a brief tick then re-triggers a PtyOutputMsg.
-// This creates a render loop for terminal windows.
-func (m *Model) schedulePtyRead(windowID string) tea.Cmd {
-	return tea.Tick(time.Millisecond*16, func(time.Time) tea.Msg {
+	return func() tea.Msg {
+		_, err := term.ReadOnce()
+		if err != nil {
+			return PtyClosedMsg{WindowID: windowID, Err: err}
+		}
 		return PtyOutputMsg{WindowID: windowID}
-	})
+	}
 }
 
 // closeTerminal closes and removes a terminal by window ID.

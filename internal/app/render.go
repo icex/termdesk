@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"image/color"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -273,13 +274,14 @@ func stripANSI(s string) []rune {
 // Windows are drawn back-to-front in z-order.
 func RenderFrame(wm *window.Manager, theme config.Theme, terminals map[string]*terminal.Terminal) *Buffer {
 	wa := wm.WorkArea()
-	// Use full bounds for the buffer
-	bounds := geometry.Rect{X: 0, Y: 0, Width: wa.Width, Height: wa.Height + wa.Y}
-	if bounds.Width <= 0 || bounds.Height <= 0 {
+	// Use full terminal bounds for the buffer (includes reserved rows for menu/dock)
+	fullWidth := wa.Width
+	fullHeight := wa.Height + wa.Y + wm.ReservedBottom()
+	if fullWidth <= 0 || fullHeight <= 0 {
 		return NewBuffer(1, 1, theme.DesktopBg)
 	}
 
-	buf := NewBuffer(bounds.Width, bounds.Height, theme.DesktopBg)
+	buf := NewBuffer(fullWidth, fullHeight, theme.DesktopBg)
 
 	// Draw windows back-to-front (painter's algorithm)
 	for _, w := range wm.Windows() {
@@ -383,22 +385,34 @@ func RenderLauncher(buf *Buffer, l *launcher.Launcher, theme config.Theme) {
 	}
 }
 
-// colorToANSIFg returns an ANSI foreground escape sequence for a color.Color.
-func colorToANSIFg(c color.Color) string {
+// writeColorFg writes an ANSI foreground escape sequence to the builder.
+func writeColorFg(sb *strings.Builder, c color.Color) {
 	if c == nil {
-		return ""
+		return
 	}
 	r, g, b, _ := c.RGBA()
-	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r>>8, g>>8, b>>8)
+	sb.WriteString("\x1b[38;2;")
+	sb.WriteString(strconv.FormatUint(uint64(r>>8), 10))
+	sb.WriteByte(';')
+	sb.WriteString(strconv.FormatUint(uint64(g>>8), 10))
+	sb.WriteByte(';')
+	sb.WriteString(strconv.FormatUint(uint64(b>>8), 10))
+	sb.WriteByte('m')
 }
 
-// colorToANSIBg returns an ANSI background escape sequence for a color.Color.
-func colorToANSIBg(c color.Color) string {
+// writeColorBg writes an ANSI background escape sequence to the builder.
+func writeColorBg(sb *strings.Builder, c color.Color) {
 	if c == nil {
-		return ""
+		return
 	}
 	r, g, b, _ := c.RGBA()
-	return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r>>8, g>>8, b>>8)
+	sb.WriteString("\x1b[48;2;")
+	sb.WriteString(strconv.FormatUint(uint64(r>>8), 10))
+	sb.WriteByte(';')
+	sb.WriteString(strconv.FormatUint(uint64(g>>8), 10))
+	sb.WriteByte(';')
+	sb.WriteString(strconv.FormatUint(uint64(b>>8), 10))
+	sb.WriteByte('m')
 }
 
 // attrsToANSI returns ANSI SGR sequences for text attributes.
@@ -469,12 +483,8 @@ func BufferToString(buf *Buffer) string {
 				if cell.Attrs != 0 {
 					sb.WriteString(attrsToANSI(cell.Attrs))
 				}
-				if cell.Fg != nil {
-					sb.WriteString(colorToANSIFg(cell.Fg))
-				}
-				if cell.Bg != nil {
-					sb.WriteString(colorToANSIBg(cell.Bg))
-				}
+				writeColorFg(&sb, cell.Fg)
+				writeColorBg(&sb, cell.Bg)
 				prevFg = cell.Fg
 				prevBg = cell.Bg
 				prevAttrs = cell.Attrs

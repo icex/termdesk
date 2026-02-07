@@ -32,6 +32,11 @@ func (m *Manager) SetReserved(top, bottom int) {
 	m.reservedB = bottom
 }
 
+// ReservedBottom returns the number of reserved rows at the bottom.
+func (m *Manager) ReservedBottom() int {
+	return m.reservedB
+}
+
 // WorkArea returns the usable area after reserved space.
 func (m *Manager) WorkArea() geometry.Rect {
 	return geometry.Rect{

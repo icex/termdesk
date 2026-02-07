@@ -703,3 +703,19 @@ func TestViewRendersLauncher(t *testing.T) {
 		t.Error("expected rendered content with launcher")
 	}
 }
+
+func TestPtyClosedClosesWindow(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	winID := m.wm.FocusedWindow().ID
+	if m.wm.Count() != 1 {
+		t.Fatal("expected 1 window")
+	}
+
+	// Simulate PTY closed message
+	updated, _ := m.Update(PtyClosedMsg{WindowID: winID})
+	model := updated.(Model)
+	if model.wm.Count() != 0 {
+		t.Errorf("expected 0 windows after PtyClosedMsg, got %d", model.wm.Count())
+	}
+}

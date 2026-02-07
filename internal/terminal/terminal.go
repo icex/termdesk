@@ -69,6 +69,24 @@ func (t *Terminal) ReadPtyLoop() error {
 	}
 }
 
+// ReadOnce reads one chunk from the PTY and feeds it to the emulator.
+// Returns (bytesRead, error). Use this for event-driven reading.
+func (t *Terminal) ReadOnce() (int, error) {
+	t.mu.Lock()
+	closed := t.closed
+	t.mu.Unlock()
+	if closed {
+		return 0, io.EOF
+	}
+
+	buf := make([]byte, 32768)
+	n, err := t.pty.Read(buf)
+	if n > 0 {
+		t.emu.Write(buf[:n])
+	}
+	return n, err
+}
+
 // WriteInput sends raw bytes to the PTY (keyboard input).
 func (t *Terminal) WriteInput(data []byte) {
 	t.mu.Lock()

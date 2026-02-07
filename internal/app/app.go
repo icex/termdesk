@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/icex/termdesk/internal/config"
+	"github.com/icex/termdesk/internal/menubar"
 	"github.com/icex/termdesk/internal/terminal"
 	"github.com/icex/termdesk/internal/window"
 	"github.com/icex/termdesk/pkg/geometry"
@@ -24,6 +25,7 @@ type Model struct {
 	drag      window.DragState
 	nextWID   int
 	terminals map[string]*terminal.Terminal
+	menuBar   *menubar.MenuBar
 }
 
 // New creates a new root Model.
@@ -32,6 +34,7 @@ func New() Model {
 		wm:        window.NewManager(80, 24),
 		theme:     config.RetroTheme(),
 		terminals: make(map[string]*terminal.Terminal),
+		menuBar:   menubar.New(80),
 	}
 }
 
@@ -45,7 +48,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.wm.SetBounds(msg.Width, msg.Height)
-		m.wm.SetReserved(0, 0) // will be 1,1 when menu bar and dock are added
+		m.wm.SetReserved(1, 0) // 1 row for menu bar at top
+		m.menuBar.SetWidth(msg.Width)
 		m.ready = true
 		m.resizeAllTerminals()
 
@@ -76,11 +80,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
+	// If menu is open, handle menu navigation first
+	if m.menuBar.IsOpen() {
+		return m.handleMenuKey(key)
+	}
+
 	// Global keybindings (always handled regardless of focused window)
 	switch key {
 	case "ctrl+c", "ctrl+q":
 		m.closeAllTerminals()
 		return m, tea.Quit
+	case "f10":
+		m.menuBar.OpenMenu(0)
+		return m, nil
 	case "ctrl+n":
 		cmd := m.openTerminalWindow()
 		return m, cmd
@@ -143,8 +155,95 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) handleMenuKey(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc", "escape", "f10":
+		m.menuBar.CloseMenu()
+	case "up":
+		m.menuBar.MoveHover(-1)
+	case "down":
+		m.menuBar.MoveHover(1)
+	case "left":
+		m.menuBar.MoveMenu(-1)
+	case "right":
+		m.menuBar.MoveMenu(1)
+	case "enter":
+		action := m.menuBar.SelectedAction()
+		m.menuBar.CloseMenu()
+		return m.executeMenuAction(action)
+	}
+	return m, nil
+}
+
+func (m Model) executeMenuAction(action string) (tea.Model, tea.Cmd) {
+	switch action {
+	case "new_terminal":
+		cmd := m.openTerminalWindow()
+		return m, cmd
+	case "quit":
+		m.closeAllTerminals()
+		return m, tea.Quit
+	case "tile_all":
+		window.TileAll(m.wm.Windows(), m.wm.WorkArea())
+		m.resizeAllTerminals()
+	case "snap_left":
+		if fw := m.wm.FocusedWindow(); fw != nil {
+			window.SnapLeft(fw, m.wm.WorkArea())
+			m.resizeTerminalForWindow(fw)
+		}
+	case "snap_right":
+		if fw := m.wm.FocusedWindow(); fw != nil {
+			window.SnapRight(fw, m.wm.WorkArea())
+			m.resizeTerminalForWindow(fw)
+		}
+	}
+	return m, nil
+}
+
 func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	p := geometry.Point{X: mouse.X, Y: mouse.Y}
+
+	// Check if click is on menu bar (y=0)
+	if mouse.Y == 0 {
+		idx := m.menuBar.MenuAtX(mouse.X)
+		if idx >= 0 {
+			if m.menuBar.IsOpen() && m.menuBar.OpenIndex == idx {
+				m.menuBar.CloseMenu()
+			} else {
+				m.menuBar.OpenMenu(idx)
+			}
+		} else {
+			m.menuBar.CloseMenu()
+		}
+		return m, nil
+	}
+
+	// Check if click is on open dropdown
+	if m.menuBar.IsOpen() {
+		positions := m.menuBar.MenuXPositions()
+		dropX := positions[m.menuBar.OpenIndex]
+		dropY := 1 // dropdown starts at row 1
+		itemIdx := m.menuBar.DropdownItemAtY(mouse.Y - dropY - 1) // -1 for top border
+		menu := m.menuBar.Menus[m.menuBar.OpenIndex]
+		dropWidth := 0
+		for _, item := range menu.Items {
+			w := len(item.Label) + 4
+			if item.Shortcut != "" {
+				w += len(item.Shortcut) + 2
+			}
+			if w > dropWidth {
+				dropWidth = w
+			}
+		}
+		if mouse.X >= dropX && mouse.X < dropX+dropWidth && itemIdx >= 0 {
+			m.menuBar.HoverIndex = itemIdx
+			action := m.menuBar.SelectedAction()
+			m.menuBar.CloseMenu()
+			return m.executeMenuAction(action)
+		}
+		// Click outside dropdown closes it
+		m.menuBar.CloseMenu()
+	}
 
 	// Find which window was clicked
 	w := m.wm.WindowAt(p)
@@ -350,6 +449,7 @@ func (m Model) View() tea.View {
 	}
 
 	buf := RenderFrame(m.wm, m.theme, m.terminals)
+	RenderMenuBar(buf, m.menuBar, m.theme)
 	v.SetContent(BufferToString(buf))
 	return v
 }

@@ -14,6 +14,8 @@ func setupReadyModel() Model {
 	m.width = 120
 	m.height = 40
 	m.wm.SetBounds(120, 40)
+	m.wm.SetReserved(1, 0) // menu bar at top
+	m.menuBar.SetWidth(120)
 	m.ready = true
 	return m
 }
@@ -434,5 +436,86 @@ func TestWindowButtonPosMatchesHitTest(t *testing.T) {
 	zone := window.HitTest(w, p, 3, 3)
 	if zone != window.HitCloseButton {
 		t.Errorf("expected HitCloseButton at close pos, got %v", zone)
+	}
+}
+
+func TestF10OpensMenu(t *testing.T) {
+	m := setupReadyModel()
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyF10}))
+	model := updated.(Model)
+	if !model.menuBar.IsOpen() {
+		t.Error("F10 should open menu")
+	}
+}
+
+func TestMenuNavigation(t *testing.T) {
+	m := setupReadyModel()
+
+	// Open menu
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyF10}))
+	model := updated.(Model)
+
+	// Move down
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	model = updated.(Model)
+	if model.menuBar.HoverIndex != 1 {
+		t.Errorf("hover = %d, want 1", model.menuBar.HoverIndex)
+	}
+
+	// Move right to next menu
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
+	model = updated.(Model)
+	if model.menuBar.OpenIndex != 1 {
+		t.Errorf("menu = %d, want 1", model.menuBar.OpenIndex)
+	}
+
+	// Escape closes
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	model = updated.(Model)
+	if model.menuBar.IsOpen() {
+		t.Error("escape should close menu")
+	}
+}
+
+func TestMenuActionQuit(t *testing.T) {
+	m := setupReadyModel()
+	m.menuBar.OpenMenu(0) // File menu
+	m.menuBar.HoverIndex = 1 // Quit
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model := updated.(Model)
+	_ = model // quit cmd is returned
+}
+
+func TestMenuBarClickOpens(t *testing.T) {
+	m := setupReadyModel()
+
+	// Click on menu bar at y=0
+	click := tea.MouseClickMsg(tea.Mouse{X: 2, Y: 0, Button: tea.MouseLeft})
+	updated, _ := m.Update(click)
+	model := updated.(Model)
+	if !model.menuBar.IsOpen() {
+		t.Error("clicking menu bar should open menu")
+	}
+}
+
+func TestMenuBarClickToggle(t *testing.T) {
+	m := setupReadyModel()
+	m.menuBar.OpenMenu(0)
+
+	// Click same menu again to close
+	click := tea.MouseClickMsg(tea.Mouse{X: 2, Y: 0, Button: tea.MouseLeft})
+	updated, _ := m.Update(click)
+	model := updated.(Model)
+	if model.menuBar.IsOpen() {
+		t.Error("clicking open menu should close it")
+	}
+}
+
+func TestViewRendersMenuBar(t *testing.T) {
+	m := setupReadyModel()
+	v := m.View()
+	if v.Content == nil {
+		t.Error("expected rendered content with menu bar")
 	}
 }

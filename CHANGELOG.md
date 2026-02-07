@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-02-07
+
+### Added
+- Menu bar at top of screen with File, Edit, View, Help menus
+- Dropdown menus with keyboard navigation (arrows, Enter, Escape)
+- F10 to toggle menu bar
+- Mouse click on menu labels opens/closes dropdowns
+- Clock display (HH:MM AM/PM) and CPU/MEM placeholders in menu bar
+- Menu actions: New Terminal, Quit, Tile All, Snap Left/Right
+- Reserved space system: windows can't overlap menu bar
+- FormatCPU, FormatMemory helpers for system indicators
+
 ## [0.5.0] - 2026-02-07
 
 ### Added

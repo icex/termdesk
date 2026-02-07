@@ -5,6 +5,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/icex/termdesk/internal/config"
+	"github.com/icex/termdesk/internal/menubar"
 	"github.com/icex/termdesk/internal/terminal"
 	"github.com/icex/termdesk/internal/window"
 	"github.com/icex/termdesk/pkg/geometry"
@@ -247,6 +248,40 @@ func RenderFrame(wm *window.Manager, theme config.Theme, terminals map[string]*t
 	}
 
 	return buf
+}
+
+// RenderMenuBar draws the menu bar at the top of the buffer.
+func RenderMenuBar(buf *Buffer, mb *menubar.MenuBar, theme config.Theme) {
+	if mb == nil || buf.Height < 1 {
+		return
+	}
+
+	// Fill menu bar row with menu bar background
+	for x := 0; x < buf.Width; x++ {
+		buf.Set(x, 0, ' ', theme.ActiveTitleFg, theme.ActiveTitleBg)
+	}
+
+	// Render menu bar text
+	barText := mb.Render(buf.Width)
+	col := 0
+	for _, ch := range barText {
+		buf.Set(col, 0, ch, theme.ActiveTitleFg, theme.ActiveTitleBg)
+		col++
+	}
+
+	// Render dropdown if open
+	if mb.IsOpen() {
+		positions := mb.MenuXPositions()
+		dropX := positions[mb.OpenIndex]
+		lines := mb.RenderDropdown()
+		for dy, line := range lines {
+			dcol := 0
+			for _, ch := range line {
+				buf.Set(dropX+dcol, 1+dy, ch, theme.ActiveTitleFg, theme.ActiveBorderBg)
+				dcol++
+			}
+		}
+	}
 }
 
 // BufferToString converts the cell buffer to a plain string (without ANSI colors).

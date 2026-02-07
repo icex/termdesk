@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0] - 2026-02-07
+
+### Added
+- App launcher / command palette overlay (Ctrl+Space to toggle)
+- Fuzzy search with prefix bonus scoring across all registered apps
+- Keyboard navigation: Up/Down to move selection, Enter to launch, Escape to dismiss
+- $PATH scanning for known tools (nvim, spf, claude, tetrigo, mc, htop, btop)
+- Default app registry: Terminal, nvim, Files (spf), Calculator
+- Launcher renders as centered modal overlay with box-drawing borders
+- Click outside launcher to dismiss
+- Dock items now launch specific commands (nvim, spf, calc) instead of always default shell
+- openTerminalWindowWith() supports launching arbitrary commands in terminal windows
+
 ## [0.7.0] - 2026-02-07
 
 ### Added

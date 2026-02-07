@@ -519,3 +519,187 @@ func TestViewRendersMenuBar(t *testing.T) {
 		t.Error("expected rendered content with menu bar")
 	}
 }
+
+// --- Launcher tests ---
+
+func TestCtrlSpaceOpensLauncher(t *testing.T) {
+	m := setupReadyModel()
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: ' ', Mod: tea.ModCtrl}))
+	model := updated.(Model)
+	if !model.launcher.Visible {
+		t.Error("ctrl+space should open launcher")
+	}
+}
+
+func TestCtrlSpaceTogglesLauncher(t *testing.T) {
+	m := setupReadyModel()
+
+	// Open
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: ' ', Mod: tea.ModCtrl}))
+	model := updated.(Model)
+	if !model.launcher.Visible {
+		t.Fatal("launcher should be visible")
+	}
+
+	// Close
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: ' ', Mod: tea.ModCtrl}))
+	model = updated.(Model)
+	if model.launcher.Visible {
+		t.Error("second ctrl+space should close launcher")
+	}
+}
+
+func TestLauncherEscapeCloses(t *testing.T) {
+	m := setupReadyModel()
+
+	// Open launcher
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: ' ', Mod: tea.ModCtrl}))
+	model := updated.(Model)
+
+	// Press Escape
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	model = updated.(Model)
+	if model.launcher.Visible {
+		t.Error("escape should close launcher")
+	}
+}
+
+func TestLauncherTyping(t *testing.T) {
+	m := setupReadyModel()
+
+	// Open launcher
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: ' ', Mod: tea.ModCtrl}))
+	model := updated.(Model)
+
+	// Type 't' 'e'
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: 't', Text: "t"}))
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: 'e', Text: "e"}))
+	model = updated.(Model)
+
+	if model.launcher.Query != "te" {
+		t.Errorf("query = %q, want 'te'", model.launcher.Query)
+	}
+}
+
+func TestLauncherNavigation(t *testing.T) {
+	m := setupReadyModel()
+
+	// Open launcher
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: ' ', Mod: tea.ModCtrl}))
+	model := updated.(Model)
+
+	// Move down
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	model = updated.(Model)
+	if model.launcher.SelectedIdx != 1 {
+		t.Errorf("selection = %d, want 1", model.launcher.SelectedIdx)
+	}
+
+	// Move up
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	model = updated.(Model)
+	if model.launcher.SelectedIdx != 0 {
+		t.Errorf("selection = %d, want 0", model.launcher.SelectedIdx)
+	}
+}
+
+func TestLauncherBackspace(t *testing.T) {
+	m := setupReadyModel()
+
+	// Open launcher and type
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: ' ', Mod: tea.ModCtrl}))
+	model := updated.(Model)
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: 'a', Text: "a"}))
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: 'b', Text: "b"}))
+	model = updated.(Model)
+
+	// Backspace
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
+	model = updated.(Model)
+	if model.launcher.Query != "a" {
+		t.Errorf("query = %q, want 'a'", model.launcher.Query)
+	}
+}
+
+func TestLauncherEnterLaunches(t *testing.T) {
+	m := setupReadyModel()
+
+	// Open launcher
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: ' ', Mod: tea.ModCtrl}))
+	model := updated.(Model)
+
+	// Press Enter — should launch the selected app and close launcher
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+
+	if model.launcher.Visible {
+		t.Error("launcher should close after enter")
+	}
+	if model.wm.Count() != 1 {
+		t.Errorf("expected 1 window after launch, got %d", model.wm.Count())
+	}
+}
+
+func TestLauncherClickOutsideDismisses(t *testing.T) {
+	m := setupReadyModel()
+
+	// Open launcher
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: ' ', Mod: tea.ModCtrl}))
+	model := updated.(Model)
+
+	// Click anywhere
+	click := tea.MouseClickMsg(tea.Mouse{X: 1, Y: 1, Button: tea.MouseLeft})
+	updated, _ = model.Update(click)
+	model = updated.(Model)
+
+	if model.launcher.Visible {
+		t.Error("clicking outside launcher should dismiss it")
+	}
+}
+
+func TestLauncherBlocksWindowKeys(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+
+	// Open launcher
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: ' ', Mod: tea.ModCtrl}))
+	model := updated.(Model)
+
+	// Alt+Tab should not cycle windows while launcher is open
+	focusBefore := model.wm.FocusedWindow().ID
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModAlt}))
+	model = updated.(Model)
+	// The key went to the launcher (which ignores it), not the window manager
+	if model.wm.FocusedWindow().ID != focusBefore {
+		t.Error("launcher should capture keys, not pass to window manager")
+	}
+}
+
+func TestLauncherCtrlQStillQuits(t *testing.T) {
+	m := setupReadyModel()
+
+	// Open launcher
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: ' ', Mod: tea.ModCtrl}))
+	model := updated.(Model)
+
+	// Ctrl+Q should still quit even with launcher open
+	_, cmd := model.Update(tea.KeyPressMsg(tea.Key{Code: 'q', Mod: tea.ModCtrl}))
+	if cmd == nil {
+		t.Error("ctrl+q should quit even with launcher open")
+	}
+}
+
+func TestViewRendersLauncher(t *testing.T) {
+	m := setupReadyModel()
+
+	// Open launcher
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: ' ', Mod: tea.ModCtrl}))
+	model := updated.(Model)
+
+	v := model.View()
+	if v.Content == nil {
+		t.Error("expected rendered content with launcher")
+	}
+}

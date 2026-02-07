@@ -6,6 +6,7 @@ import (
 
 	"github.com/icex/termdesk/internal/config"
 	"github.com/icex/termdesk/internal/dock"
+	"github.com/icex/termdesk/internal/launcher"
 	"github.com/icex/termdesk/internal/menubar"
 	"github.com/icex/termdesk/internal/terminal"
 	"github.com/icex/termdesk/internal/window"
@@ -28,6 +29,7 @@ type Model struct {
 	terminals map[string]*terminal.Terminal
 	menuBar   *menubar.MenuBar
 	dock      *dock.Dock
+	launcher  *launcher.Launcher
 }
 
 // New creates a new root Model.
@@ -38,6 +40,7 @@ func New() Model {
 		terminals: make(map[string]*terminal.Terminal),
 		menuBar:   menubar.New(80),
 		dock:      dock.New(80),
+		launcher:  launcher.New(),
 	}
 }
 
@@ -84,6 +87,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
+	// If launcher is open, handle launcher keys first
+	if m.launcher.Visible {
+		return m.handleLauncherKey(msg, key)
+	}
+
 	// If menu is open, handle menu navigation first
 	if m.menuBar.IsOpen() {
 		return m.handleMenuKey(key)
@@ -94,6 +102,9 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c", "ctrl+q":
 		m.closeAllTerminals()
 		return m, tea.Quit
+	case "ctrl+space":
+		m.launcher.Toggle()
+		return m, nil
 	case "f10":
 		m.menuBar.OpenMenu(0)
 		return m, nil
@@ -159,6 +170,38 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) handleLauncherKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "ctrl+c", "ctrl+q":
+		m.closeAllTerminals()
+		return m, tea.Quit
+	case "esc", "escape", "ctrl+space":
+		m.launcher.Hide()
+		return m, nil
+	case "up":
+		m.launcher.MoveSelection(-1)
+	case "down":
+		m.launcher.MoveSelection(1)
+	case "backspace":
+		m.launcher.Backspace()
+	case "enter":
+		entry := m.launcher.SelectedEntry()
+		m.launcher.Hide()
+		if entry != nil {
+			return m.launchApp(entry.Command, entry.Args)
+		}
+	default:
+		// Type printable characters into the search
+		k := tea.Key(msg)
+		if k.Text != "" {
+			for _, ch := range k.Text {
+				m.launcher.TypeChar(ch)
+			}
+		}
+	}
+	return m, nil
+}
+
 func (m Model) handleMenuKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "esc", "escape", "f10":
@@ -207,11 +250,22 @@ func (m Model) executeMenuAction(action string) (tea.Model, tea.Cmd) {
 func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	p := geometry.Point{X: mouse.X, Y: mouse.Y}
 
+	// If launcher is open, dismiss on click outside
+	if m.launcher.Visible {
+		m.launcher.Hide()
+		return m, nil
+	}
+
 	// Check if click is on dock (bottom row)
 	if mouse.Y == m.height-1 {
 		idx := m.dock.ItemAtX(mouse.X)
-		if idx >= 0 {
-			cmd := m.openTerminalWindow()
+		if idx >= 0 && idx < len(m.dock.Items) {
+			item := m.dock.Items[idx]
+			if item.Command == "$SHELL" || item.Command == "" {
+				cmd := m.openTerminalWindow()
+				return m, cmd
+			}
+			cmd := m.openTerminalWindowWith(item.Command, item.Args)
 			return m, cmd
 		}
 		return m, nil
@@ -343,11 +397,26 @@ func (m Model) handleMouseRelease() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// openTerminalWindow creates a new window with an embedded terminal.
+// launchApp launches a command in a new terminal window.
+func (m Model) launchApp(command string, args []string) (tea.Model, tea.Cmd) {
+	cmd := m.openTerminalWindowWith(command, args)
+	return m, cmd
+}
+
+// openTerminalWindow creates a new window running the default shell.
 func (m *Model) openTerminalWindow() tea.Cmd {
+	return m.openTerminalWindowWith("", nil)
+}
+
+// openTerminalWindowWith creates a new window running the specified command.
+// If command is empty, it launches the default shell.
+func (m *Model) openTerminalWindowWith(command string, args []string) tea.Cmd {
 	m.nextWID++
 	id := fmt.Sprintf("win-%d", m.nextWID)
 	title := fmt.Sprintf("Terminal %d", m.nextWID)
+	if command != "" {
+		title = command
+	}
 
 	wa := m.wm.WorkArea()
 	offset := (m.nextWID - 1) % 10
@@ -375,7 +444,13 @@ func (m *Model) openTerminalWindow() tea.Cmd {
 		contentH = 1
 	}
 
-	term, err := terminal.NewShell(contentW, contentH)
+	var term *terminal.Terminal
+	var err error
+	if command == "" {
+		term, err = terminal.NewShell(contentW, contentH)
+	} else {
+		term, err = terminal.New(command, args, contentW, contentH)
+	}
 	if err != nil {
 		// Fall back to a window with no terminal
 		return nil
@@ -472,6 +547,9 @@ func (m Model) View() tea.View {
 	buf := RenderFrame(m.wm, m.theme, m.terminals)
 	RenderMenuBar(buf, m.menuBar, m.theme)
 	RenderDock(buf, m.dock, m.theme)
+	if m.launcher.Visible {
+		RenderLauncher(buf, m.launcher, m.theme)
+	}
 	v.SetContent(BufferToString(buf))
 	return v
 }

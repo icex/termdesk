@@ -6,6 +6,7 @@ import (
 
 	"github.com/icex/termdesk/internal/config"
 	"github.com/icex/termdesk/internal/dock"
+	"github.com/icex/termdesk/internal/launcher"
 	"github.com/icex/termdesk/internal/menubar"
 	"github.com/icex/termdesk/internal/terminal"
 	"github.com/icex/termdesk/internal/window"
@@ -304,6 +305,40 @@ func RenderDock(buf *Buffer, d *dock.Dock, theme config.Theme) {
 	for _, ch := range dockText {
 		buf.Set(col, y, ch, theme.ActiveTitleFg, theme.ActiveTitleBg)
 		col++
+	}
+}
+
+// RenderLauncher draws the launcher overlay centered on the buffer.
+func RenderLauncher(buf *Buffer, l *launcher.Launcher, theme config.Theme) {
+	if l == nil || !l.Visible {
+		return
+	}
+
+	lines := l.Render(buf.Width, buf.Height)
+	if len(lines) == 0 {
+		return
+	}
+
+	// Center vertically
+	boxH := len(lines)
+	startY := (buf.Height - boxH) / 3 // slightly above center looks better
+	if startY < 1 {
+		startY = 1
+	}
+
+	// Center horizontally (first line determines width)
+	boxW := utf8.RuneCountInString(lines[0])
+	startX := (buf.Width - boxW) / 2
+	if startX < 0 {
+		startX = 0
+	}
+
+	for dy, line := range lines {
+		col := 0
+		for _, ch := range line {
+			buf.Set(startX+col, startY+dy, ch, theme.ActiveTitleFg, theme.ActiveBorderBg)
+			col++
+		}
 	}
 }
 

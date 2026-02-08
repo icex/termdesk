@@ -3,6 +3,7 @@ package terminal
 import (
 	"os"
 	"os/exec"
+	"syscall"
 
 	"github.com/creack/pty"
 )
@@ -18,6 +19,11 @@ func NewPtySession(command string, args []string, rows, cols uint16) (*PtySessio
 	cmd := exec.Command(command, args...)
 	cmd.Env = os.Environ()
 	cmd.Env = append(cmd.Env, "TERM=xterm-256color")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setsid:  true,
+		Setctty: true,
+		Ctty:    0, // make stdin the controlling terminal — required for sudo
+	}
 
 	ws := &pty.Winsize{Rows: rows, Cols: cols}
 	f, err := pty.StartWithSize(cmd, ws)

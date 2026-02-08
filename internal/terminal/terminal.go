@@ -11,11 +11,12 @@ import (
 
 // Terminal combines a PTY session with a VT emulator.
 type Terminal struct {
-	pty     *PtySession
-	emu     *vt.SafeEmulator
-	closed  bool
-	mu      sync.Mutex
-	writeCh chan []byte // buffered write channel for raw PTY input
+	pty          *PtySession
+	emu          *vt.SafeEmulator
+	closed       bool
+	cursorHidden bool // tracks whether the child app hid the cursor (DECTCEM)
+	mu           sync.Mutex
+	writeCh      chan []byte // buffered write channel for raw PTY input
 }
 
 // New creates a terminal running the given command.
@@ -32,6 +33,16 @@ func New(command string, args []string, cols, rows int) (*Terminal, error) {
 		emu:     emu,
 		writeCh: make(chan []byte, 256),
 	}
+
+	// Track cursor visibility via emulator callback (DECTCEM mode).
+	// Apps like btop/htop hide the cursor; we should respect that.
+	emu.SetCallbacks(vt.Callbacks{
+		CursorVisibility: func(visible bool) {
+			t.mu.Lock()
+			t.cursorHidden = !visible
+			t.mu.Unlock()
+		},
+	})
 
 	// Spawn writer goroutine — drains writeCh and writes to PTY.
 	// This keeps WriteInput non-blocking.
@@ -164,6 +175,16 @@ func (t *Terminal) SendKey(code rune, mod uv.KeyMod, text string) {
 	if closed {
 		return
 	}
+
+	// Workaround: the vt emulator's SendKey only outputs printable characters
+	// when Mod==0. Characters typed with Shift or CapsLock (e.g. "A", "!", "@")
+	// have non-zero Mod and are silently dropped. For these, write the text
+	// directly to the PTY, bypassing the emulator's key encoding.
+	if text != "" && mod != 0 && mod&(uv.ModCtrl|uv.ModAlt) == 0 {
+		t.WriteInput([]byte(text))
+		return
+	}
+
 	t.emu.SendKey(uv.KeyPressEvent(uv.Key{Code: code, Mod: mod, Text: text}))
 }
 
@@ -222,6 +243,13 @@ func (t *Terminal) SendMouseWheel(button uv.MouseButton, col, row int) {
 		Y:      row,
 		Button: button,
 	}))
+}
+
+// IsCursorHidden returns whether the terminal app has hidden the cursor (DECTCEM).
+func (t *Terminal) IsCursorHidden() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.cursorHidden
 }
 
 // CursorPosition returns the cursor's X, Y position in the terminal grid.

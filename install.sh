@@ -273,9 +273,10 @@ build() {
         # linker requires 64-byte TLS alignment on ARM64, but Go's internal
         # linker only sets 8-byte alignment for GOOS=linux. Building with
         # GOOS=android makes Go use the correct 64-byte TLS alignment.
-        info "Termux detected — building with GOOS=android for Bionic TLS compatibility"
-        info "Running: GOOS=android ${GO_CMD} build -o bin/termdesk ./cmd/termdesk"
-        GOOS=android "${GO_CMD}" build -o bin/termdesk ./cmd/termdesk
+        # CGO_ENABLED=0 avoids needing the Android NDK clang toolchain.
+        info "Termux detected — building with GOOS=android CGO_ENABLED=0 for Bionic TLS compatibility"
+        info "Running: CGO_ENABLED=0 GOOS=android ${GO_CMD} build -o bin/termdesk ./cmd/termdesk"
+        CGO_ENABLED=0 GOOS=android "${GO_CMD}" build -o bin/termdesk ./cmd/termdesk
     else
         info "Running: ${GO_CMD} build -o bin/termdesk ./cmd/termdesk"
         "${GO_CMD}" build -o bin/termdesk ./cmd/termdesk

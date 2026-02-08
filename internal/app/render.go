@@ -116,7 +116,8 @@ func (b *Buffer) FillRect(r geometry.Rect, char rune, fg, bg string) {
 }
 
 // RenderWindow draws a single window (border + title bar + content) into the buffer.
-func RenderWindow(buf *Buffer, w *window.Window, theme config.Theme, term *terminal.Terminal) {
+// showCursor controls whether the terminal cursor is rendered (false = blink-off phase).
+func RenderWindow(buf *Buffer, w *window.Window, theme config.Theme, term *terminal.Terminal, showCursor bool) {
 	if !w.Visible || w.Minimized {
 		return
 	}
@@ -243,8 +244,9 @@ func RenderWindow(buf *Buffer, w *window.Window, theme config.Theme, term *termi
 		defaultFg := hexToColor("#C0C0C0")
 		renderTerminalContent(buf, contentRect, term, defaultFg, hexToColor(cbg))
 
-		// Show cursor for focused terminal windows — invert fg/bg at cursor position
-		if w.Focused {
+		// Show cursor for focused terminal windows — invert fg/bg at cursor position.
+		// Respect the app's cursor visibility (DECTCEM): btop/htop hide it.
+		if w.Focused && showCursor && !term.IsCursorHidden() {
 			cx, cy := term.CursorPosition()
 			sx := contentRect.X + cx
 			sy := contentRect.Y + cy
@@ -360,7 +362,7 @@ func stripANSI(s string) []rune {
 // RenderFrame composites all windows using the painter's algorithm.
 // Windows are drawn back-to-front in z-order.
 // animRects provides animated rect overrides for windows currently animating.
-func RenderFrame(wm *window.Manager, theme config.Theme, terminals map[string]*terminal.Terminal, animRects map[string]geometry.Rect) *Buffer {
+func RenderFrame(wm *window.Manager, theme config.Theme, terminals map[string]*terminal.Terminal, animRects map[string]geometry.Rect, showCursor bool) *Buffer {
 	wa := wm.WorkArea()
 	// Use full terminal bounds for the buffer (includes reserved rows for menu/dock)
 	fullWidth := wa.Width
@@ -383,13 +385,13 @@ func RenderFrame(wm *window.Manager, theme config.Theme, terminals map[string]*t
 			w.Rect = animRect
 			// Skip terminal content during close animation (window is shrinking)
 			if animRect.Width <= 3 || animRect.Height <= 3 {
-				RenderWindow(buf, w, theme, nil)
+				RenderWindow(buf, w, theme, nil, showCursor)
 			} else {
-				RenderWindow(buf, w, theme, term)
+				RenderWindow(buf, w, theme, term, showCursor)
 			}
 			w.Rect = origRect // restore for state consistency
 		} else {
-			RenderWindow(buf, w, theme, term)
+			RenderWindow(buf, w, theme, term, showCursor)
 		}
 	}
 

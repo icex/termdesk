@@ -94,7 +94,7 @@ func TestRenderWindowBasic(t *testing.T) {
 	w := window.NewWindow("w1", "Test", geometry.Rect{X: 0, Y: 0, Width: 20, Height: 8}, nil)
 	w.Focused = true
 
-	RenderWindow(buf, w, theme, nil)
+	RenderWindow(buf, w, theme, nil, true)
 
 	// Check corners
 	if buf.Cells[0][0].Char != theme.BorderTopLeft {
@@ -125,7 +125,7 @@ func TestRenderWindowSkipsMinimized(t *testing.T) {
 	w := window.NewWindow("w1", "Test", geometry.Rect{X: 0, Y: 0, Width: 20, Height: 8}, nil)
 	w.Minimized = true
 
-	RenderWindow(buf, w, theme, nil)
+	RenderWindow(buf, w, theme, nil, true)
 
 	// Should not have drawn anything
 	if buf.Cells[0][0].Char != ' ' {
@@ -139,7 +139,7 @@ func TestRenderWindowSkipsInvisible(t *testing.T) {
 	w := window.NewWindow("w1", "Test", geometry.Rect{X: 0, Y: 0, Width: 20, Height: 8}, nil)
 	w.Visible = false
 
-	RenderWindow(buf, w, theme, nil)
+	RenderWindow(buf, w, theme, nil, true)
 
 	if buf.Cells[0][0].Char != ' ' {
 		t.Error("invisible window should not be rendered")
@@ -151,7 +151,7 @@ func TestRenderWindowTooSmall(t *testing.T) {
 	buf := NewBuffer(10, 5, theme.DesktopBg)
 	w := window.NewWindow("w1", "Test", geometry.Rect{X: 0, Y: 0, Width: 2, Height: 2}, nil)
 
-	RenderWindow(buf, w, theme, nil)
+	RenderWindow(buf, w, theme, nil, true)
 
 	// Too small to render, should be no-op
 	if buf.Cells[0][0].Char != ' ' {
@@ -165,7 +165,7 @@ func TestRenderWindowTitleTruncation(t *testing.T) {
 	w := window.NewWindow("w1", "This is a very long window title that should be truncated", geometry.Rect{X: 0, Y: 0, Width: 30, Height: 5}, nil)
 	w.Focused = true
 
-	RenderWindow(buf, w, theme, nil)
+	RenderWindow(buf, w, theme, nil, true)
 
 	// Title should be present but truncated with "..."
 	row := buf.Cells[0]
@@ -188,13 +188,13 @@ func TestRenderWindowActiveInactiveColors(t *testing.T) {
 
 	w := window.NewWindow("w1", "Test", geometry.Rect{X: 0, Y: 0, Width: 20, Height: 8}, nil)
 	w.Focused = true
-	RenderWindow(buf, w, theme, nil)
+	RenderWindow(buf, w, theme, nil, true)
 	activeFg := buf.Cells[0][0].Fg
 
 	buf2 := NewBuffer(30, 10, theme.DesktopBg)
 	w2 := window.NewWindow("w2", "Test", geometry.Rect{X: 0, Y: 0, Width: 20, Height: 8}, nil)
 	w2.Focused = false
-	RenderWindow(buf2, w2, theme, nil)
+	RenderWindow(buf2, w2, theme, nil, true)
 	inactiveFg := buf2.Cells[0][0].Fg
 
 	// Foreground colors should differ (backgrounds are transparent = same as desktop)
@@ -206,7 +206,7 @@ func TestRenderWindowActiveInactiveColors(t *testing.T) {
 func TestRenderFrameEmpty(t *testing.T) {
 	theme := testTheme()
 	wm := window.NewManager(40, 20)
-	buf := RenderFrame(wm, theme, nil, nil)
+	buf := RenderFrame(wm, theme, nil, nil, true)
 
 	if buf.Width != 40 || buf.Height != 20 {
 		t.Errorf("buffer dimensions = %dx%d, want 40x20", buf.Width, buf.Height)
@@ -230,7 +230,7 @@ func TestRenderFrameWithWindows(t *testing.T) {
 	wm.AddWindow(w1)
 	wm.AddWindow(w2)
 
-	buf := RenderFrame(wm, theme, nil, nil)
+	buf := RenderFrame(wm, theme, nil, nil, true)
 
 	// In the overlap area, w2 (front) should be visible
 	// w2 starts at (10,5), so (10,5) should be w2's top-left corner
@@ -247,7 +247,7 @@ func TestRenderFrameWithWindows(t *testing.T) {
 func TestRenderFrameZeroBounds(t *testing.T) {
 	theme := testTheme()
 	wm := window.NewManager(0, 0)
-	buf := RenderFrame(wm, theme, nil, nil)
+	buf := RenderFrame(wm, theme, nil, nil, true)
 	if buf.Width != 1 || buf.Height != 1 {
 		t.Errorf("zero bounds buffer = %dx%d, want 1x1", buf.Width, buf.Height)
 	}
@@ -279,7 +279,7 @@ func TestRenderWindowCloseButton(t *testing.T) {
 	w := window.NewWindow("w1", "Test", geometry.Rect{X: 0, Y: 0, Width: 20, Height: 8}, nil)
 	w.Focused = true
 
-	RenderWindow(buf, w, theme, nil)
+	RenderWindow(buf, w, theme, nil, true)
 
 	// Close button [X] should be at right side of title bar
 	// For a 20-wide window, close button at x=17,18,19 area
@@ -301,7 +301,7 @@ func TestRenderWindowMaxButton(t *testing.T) {
 	w.Focused = true
 	w.Resizable = true
 
-	RenderWindow(buf, w, theme, nil)
+	RenderWindow(buf, w, theme, nil, true)
 
 	row := buf.Cells[0]
 	var titleStr strings.Builder
@@ -323,7 +323,7 @@ func TestRenderWindowRestoreButton(t *testing.T) {
 	prevRect := geometry.Rect{X: 5, Y: 5, Width: 10, Height: 5}
 	w.PreMaxRect = &prevRect
 
-	RenderWindow(buf, w, theme, nil)
+	RenderWindow(buf, w, theme, nil, true)
 
 	row := buf.Cells[0]
 	var titleStr strings.Builder
@@ -433,7 +433,7 @@ func TestRenderWindowWithTerminal(t *testing.T) {
 	w := window.NewWindow("w1", "Term", geometry.Rect{X: 0, Y: 0, Width: 20, Height: 8}, nil)
 	w.Focused = true
 
-	RenderWindow(buf, w, theme, term)
+	RenderWindow(buf, w, theme, term, true)
 
 	// Should have both borders and terminal content
 	if buf.Cells[0][0].Char != theme.BorderTopLeft {

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/charmbracelet/x/term"
 )
@@ -73,10 +75,22 @@ func Attach(name string) error {
 var errDetached = fmt.Errorf("detached")
 
 // clientReadLoop reads TLV messages from the server and writes output to the terminal.
+// Uses buffered output with periodic flushing to minimize syscalls over SSH.
 func clientReadLoop(conn net.Conn, out *os.File) error {
+	bw := bufio.NewWriterSize(out, 32768)
+	// Flush periodically — coalesces many small writes into fewer large ones.
+	ticker := time.NewTicker(8 * time.Millisecond)
+	defer ticker.Stop()
+	go func() {
+		for range ticker.C {
+			bw.Flush()
+		}
+	}()
+
 	for {
 		typ, payload, err := ReadMsg(conn)
 		if err != nil {
+			bw.Flush()
 			if err == io.EOF {
 				return nil
 			}
@@ -84,7 +98,7 @@ func clientReadLoop(conn net.Conn, out *os.File) error {
 		}
 		switch typ {
 		case MsgOutput, MsgRedraw:
-			out.Write(payload)
+			bw.Write(payload)
 		}
 	}
 }

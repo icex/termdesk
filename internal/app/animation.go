@@ -50,7 +50,18 @@ const (
 	animDuration   = 200 * time.Millisecond // window animations
 	exposeDuration = 350 * time.Millisecond // exposé transitions (smoother)
 	dockPulseDur   = 400 * time.Millisecond // dock pulse
+	cursorBlinkRate = 500 * time.Millisecond // cursor blink interval
 )
+
+// CursorBlinkMsg triggers cursor blink state toggle.
+type CursorBlinkMsg struct{}
+
+// tickCursorBlink returns a Cmd that sends a CursorBlinkMsg after one blink interval.
+func tickCursorBlink() tea.Cmd {
+	return tea.Tick(cursorBlinkRate, func(t time.Time) tea.Msg {
+		return CursorBlinkMsg{}
+	})
+}
 
 // tickAnimation returns a Cmd that sends an AnimationTickMsg after one frame.
 func tickAnimation() tea.Cmd {

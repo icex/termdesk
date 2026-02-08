@@ -55,6 +55,8 @@ type Model struct {
 	keybindings  config.KeyBindings
 	actionMap    map[string]string // key string → action name (reverse lookup)
 	prefixPending bool            // true when prefix key pressed, waiting for action
+	cursorVisible bool            // cursor blink state (toggled every 500ms)
+	cursorBlinkAt time.Time       // last cursor blink toggle time
 }
 
 // ConfirmDialog represents a confirmation dialog overlay.
@@ -176,23 +178,31 @@ func New() Model {
 	userCfg := config.LoadUserConfig()
 	theme := config.GetTheme(userCfg.Theme)
 	mb := menubar.New(80)
-	mb.Username = os.Getenv("USER")
-	if mb.Username == "" {
-		mb.Username = os.Getenv("LOGNAME")
+	username := os.Getenv("USER")
+	if username == "" {
+		username = os.Getenv("LOGNAME")
+	}
+	hostname, _ := os.Hostname()
+	if hostname != "" {
+		mb.Username = username + "@" + hostname
+	} else {
+		mb.Username = username
 	}
 	d := dock.New(80)
 	d.IconsOnly = userCfg.IconsOnly
 	am := BuildActionMap(userCfg.Keys)
 	return Model{
-		wm:          window.NewManager(80, 24),
-		theme:       theme,
-		terminals:   make(map[string]*terminal.Terminal),
-		menuBar:     mb,
-		dock:        d,
-		launcher:    launcher.New(),
-		progRef:     &programRef{},
-		keybindings: userCfg.Keys,
-		actionMap:   am,
+		wm:            window.NewManager(80, 24),
+		theme:         theme,
+		terminals:     make(map[string]*terminal.Terminal),
+		menuBar:       mb,
+		dock:          d,
+		launcher:      launcher.New(),
+		progRef:       &programRef{},
+		keybindings:   userCfg.Keys,
+		actionMap:     am,
+		cursorVisible: true,
+		cursorBlinkAt: time.Now(),
 	}
 }
 
@@ -204,7 +214,7 @@ func (m *Model) SetProgram(p *tea.Program) {
 }
 
 func (m Model) Init() tea.Cmd {
-	return m.tickSystemStats()
+	return tea.Batch(m.tickSystemStats(), tickCursorBlink())
 }
 
 func (m Model) tickSystemStats() tea.Cmd {
@@ -272,6 +282,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tickAnimation()
 		}
 		return m, nil
+
+	case CursorBlinkMsg:
+		if m.inputMode == ModeTerminal {
+			m.cursorVisible = !m.cursorVisible
+		} else {
+			m.cursorVisible = true
+		}
+		return m, tickCursorBlink()
 
 	case PtyClosedMsg:
 		// PTY exited — animate close, then remove
@@ -1427,7 +1445,9 @@ func (m *Model) openTerminalWindowWith(command string, args []string) tea.Cmd {
 	m.terminals[id] = term
 
 	// Spawn background reader goroutine — reads PTY output and sends messages
-	// via program.Send(). Never blocks the main Update loop.
+	// via program.Send(). Rate-limited: at most one PtyOutputMsg per 8ms (~120fps)
+	// to avoid flooding Bubble Tea with re-renders during burst output (e.g. dmesg).
+	// A trailing timer ensures the final chunk is always rendered.
 	if m.progRef != nil && m.progRef.p != nil {
 		p := m.progRef.p
 		go func() {
@@ -1435,14 +1455,43 @@ func (m *Model) openTerminalWindowWith(command string, args []string) tea.Cmd {
 				recover() // prevent panics from crashing the entire app
 				p.Send(PtyClosedMsg{WindowID: id})
 			}()
+			var lastSend time.Time
+			const minInterval = 8 * time.Millisecond
+			flushTimer := time.NewTimer(0)
+			if !flushTimer.Stop() {
+				<-flushTimer.C
+			}
+			dirty := false
 			for {
 				n, err := term.ReadOnce()
+				if n > 0 {
+					now := time.Now()
+					if now.Sub(lastSend) >= minInterval {
+						p.Send(PtyOutputMsg{WindowID: id})
+						lastSend = now
+						dirty = false
+						flushTimer.Stop()
+					} else if !dirty {
+						dirty = true
+						flushTimer.Reset(minInterval)
+					}
+				}
+				// Drain trailing flush timer in non-blocking select
+				select {
+				case <-flushTimer.C:
+					if dirty {
+						p.Send(PtyOutputMsg{WindowID: id})
+						lastSend = time.Now()
+						dirty = false
+					}
+				default:
+				}
 				if err != nil {
+					if dirty {
+						p.Send(PtyOutputMsg{WindowID: id})
+					}
 					p.Send(PtyClosedMsg{WindowID: id, Err: err})
 					return
-				}
-				if n > 0 {
-					p.Send(PtyOutputMsg{WindowID: id})
 				}
 			}
 		}()
@@ -2146,7 +2195,9 @@ func (m Model) View() tea.View {
 			}
 		}
 	}
-	buf := RenderFrame(m.wm, m.theme, m.terminals, animRects)
+	// Cursor blinks in Terminal mode, always visible otherwise
+	showCursor := m.inputMode != ModeTerminal || m.cursorVisible
+	buf := RenderFrame(m.wm, m.theme, m.terminals, animRects, showCursor)
 	RenderMenuBar(buf, m.menuBar, m.theme, m.inputMode, m.prefixPending)
 	RenderDock(buf, m.dock, m.theme, m.animations)
 	if m.launcher.Visible {

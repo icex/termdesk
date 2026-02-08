@@ -149,14 +149,27 @@ func (s *Server) Run() error {
 // readPtyLoop reads from the master PTY, feeds to emulator, and forwards to client.
 func (s *Server) readPtyLoop() {
 	buf := make([]byte, 32768)
+	// Emulator runs in a separate goroutine to keep it off the critical output path.
+	emuCh := make(chan []byte, 64)
+	go func() {
+		for data := range emuCh {
+			s.emu.Write(data)
+		}
+	}()
+	defer close(emuCh)
+
 	for {
 		n, err := s.ptmx.Read(buf)
 		if n > 0 {
-			data := make([]byte, n)
-			copy(data, buf[:n])
+			data := buf[:n]
 
-			// Feed to emulator (always, even when no client)
-			s.emu.Write(data)
+			// Feed copy to emulator goroutine (async, non-blocking best-effort)
+			emuData := make([]byte, n)
+			copy(emuData, data)
+			select {
+			case emuCh <- emuData:
+			default: // drop if emulator falls behind
+			}
 
 			// Forward to connected client
 			s.clientMu.Lock()
@@ -197,10 +210,18 @@ func (s *Server) acceptLoop() {
 		s.client = conn
 		s.clientMu.Unlock()
 
-		// Send current screen state for instant reattach
-		screen := s.emu.Render()
+		// Send terminal mode preamble + screen content for instant reattach.
+		// The client's terminal starts fresh — we must re-enable alt screen,
+		// mouse mode, and colors before sending the cell content.
+		var preamble []byte
+		preamble = append(preamble, "\x1b[?1049h"...)   // alt screen
+		preamble = append(preamble, "\x1b[?1002h"...)   // mouse cell motion
+		preamble = append(preamble, "\x1b[?1006h"...)   // SGR mouse encoding
+		preamble = append(preamble, "\x1b[?25l"...)     // hide cursor (BT manages it)
+		preamble = append(preamble, "\x1b[?2004h"...)   // bracketed paste
+		preamble = append(preamble, s.emu.Render()...)
 		s.writeMu.Lock()
-		err = WriteMsg(conn, MsgRedraw, []byte(screen))
+		err = WriteMsg(conn, MsgRedraw, preamble)
 		s.writeMu.Unlock()
 		if err != nil {
 			s.disconnectClient()

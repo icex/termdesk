@@ -317,6 +317,7 @@ func buildAppEnv() []string {
 	env = append(env,
 		"TERM=xterm-256color",
 		"COLORTERM=truecolor",
+		"TERMDESK=1",
 	)
 	return env
 }

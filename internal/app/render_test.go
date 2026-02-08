@@ -206,7 +206,7 @@ func TestRenderWindowActiveInactiveColors(t *testing.T) {
 func TestRenderFrameEmpty(t *testing.T) {
 	theme := testTheme()
 	wm := window.NewManager(40, 20)
-	buf := RenderFrame(wm, theme, nil, nil, true, 0)
+	buf := RenderFrame(wm, theme, nil, nil, true, 0, SelectionInfo{})
 
 	if buf.Width != 40 || buf.Height != 20 {
 		t.Errorf("buffer dimensions = %dx%d, want 40x20", buf.Width, buf.Height)
@@ -231,7 +231,7 @@ func TestRenderFrameWithWindows(t *testing.T) {
 	wm.AddWindow(w1)
 	wm.AddWindow(w2)
 
-	buf := RenderFrame(wm, theme, nil, nil, true, 0)
+	buf := RenderFrame(wm, theme, nil, nil, true, 0, SelectionInfo{})
 
 	// In the overlap area, w2 (front) should be visible
 	// w2 starts at (10,5), so (10,5) should be w2's top-left corner
@@ -248,7 +248,7 @@ func TestRenderFrameWithWindows(t *testing.T) {
 func TestRenderFrameZeroBounds(t *testing.T) {
 	theme := testTheme()
 	wm := window.NewManager(0, 0)
-	buf := RenderFrame(wm, theme, nil, nil, true, 0)
+	buf := RenderFrame(wm, theme, nil, nil, true, 0, SelectionInfo{})
 	if buf.Width != 1 || buf.Height != 1 {
 		t.Errorf("zero bounds buffer = %dx%d, want 1x1", buf.Width, buf.Height)
 	}

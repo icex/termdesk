@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"image/color"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -607,7 +608,15 @@ func stripANSI(s string) []rune {
 // RenderFrame composites all windows using the painter's algorithm.
 // Windows are drawn back-to-front in z-order.
 // animRects provides animated rect overrides for windows currently animating.
-func RenderFrame(wm *window.Manager, theme config.Theme, terminals map[string]*terminal.Terminal, animRects map[string]geometry.Rect, showCursor bool, scrollOffset int) *Buffer {
+// SelectionInfo holds the current copy-mode selection state for rendering.
+type SelectionInfo struct {
+	Active   bool
+	Start    geometry.Point // X=col, Y=absLine
+	End      geometry.Point // X=col, Y=absLine
+	CopyMode bool          // true when in copy mode (for scrollbar)
+}
+
+func RenderFrame(wm *window.Manager, theme config.Theme, terminals map[string]*terminal.Terminal, animRects map[string]geometry.Rect, showCursor bool, scrollOffset int, sel SelectionInfo) *Buffer {
 	wa := wm.WorkArea()
 	// Use full terminal bounds for the buffer (includes reserved rows for menu/dock)
 	fullWidth := wa.Width
@@ -652,7 +661,111 @@ func RenderFrame(wm *window.Manager, theme config.Theme, terminals map[string]*t
 		}
 	}
 
+	// Render selection highlighting and scrollbar for the focused window in copy mode
+	if fw := wm.FocusedWindow(); fw != nil && sel.CopyMode {
+		cr := fw.ContentRect()
+		if term := terminals[fw.ID]; term != nil {
+			sbLen := term.ScrollbackLen()
+			if sel.Active {
+				renderSelection(buf, cr, sel.Start, sel.End, scrollOffset, sbLen, cr.Height)
+			}
+			renderScrollbar(buf, fw, theme, term, scrollOffset)
+		}
+	}
+
 	return buf
+}
+
+// renderSelection highlights selected cells by inverting fg/bg.
+func renderSelection(buf *Buffer, contentRect geometry.Rect, start, end geometry.Point, scrollOffset, scrollbackLen, contentH int) {
+	// Normalize: ensure start <= end
+	sLine, sCol := start.Y, start.X
+	eLine, eCol := end.Y, end.X
+	if sLine > eLine || (sLine == eLine && sCol > eCol) {
+		sLine, eLine = eLine, sLine
+		sCol, eCol = eCol, sCol
+	}
+
+	for dy := 0; dy < contentH; dy++ {
+		absLine := mouseToAbsLine(dy, scrollOffset, scrollbackLen, contentH)
+		if absLine < sLine || absLine > eLine {
+			continue
+		}
+		colStart := 0
+		colEnd := contentRect.Width
+		if absLine == sLine {
+			colStart = sCol
+		}
+		if absLine == eLine {
+			colEnd = eCol + 1
+		}
+		if colStart < 0 {
+			colStart = 0
+		}
+		if colEnd > contentRect.Width {
+			colEnd = contentRect.Width
+		}
+		for dx := colStart; dx < colEnd; dx++ {
+			bx := contentRect.X + dx
+			by := contentRect.Y + dy
+			if bx >= 0 && bx < buf.Width && by >= 0 && by < buf.Height {
+				cell := &buf.Cells[by][bx]
+				cell.Fg, cell.Bg = cell.Bg, cell.Fg
+			}
+		}
+	}
+}
+
+// renderScrollbar draws a scrollbar on the right border of the window in copy mode.
+func renderScrollbar(buf *Buffer, w *window.Window, theme config.Theme, term *terminal.Terminal, scrollOffset int) {
+	c := theme.C()
+	r := w.Rect
+	trackX := r.Right() - 1
+	trackTop := r.Y + 1
+	trackBot := r.Bottom() - 2 // above bottom border
+	trackH := trackBot - trackTop + 1
+	if trackH < 3 {
+		return
+	}
+
+	sbLen := term.ScrollbackLen()
+	termH := term.Height()
+	totalLines := sbLen + termH
+	contentH := w.ContentRect().Height
+	if totalLines <= contentH {
+		return // no scrollbar needed
+	}
+
+	// Thumb size and position
+	thumbH := trackH * contentH / totalLines
+	if thumbH < 1 {
+		thumbH = 1
+	}
+	// scrollOffset=0 means viewing bottom (most recent), scrollOffset=sbLen means top
+	viewTop := totalLines - contentH - scrollOffset
+	thumbPos := trackH * viewTop / totalLines
+	if thumbPos+thumbH > trackH {
+		thumbPos = trackH - thumbH
+	}
+	if thumbPos < 0 {
+		thumbPos = 0
+	}
+
+	trackFg := c.InactiveBorderFg
+	trackBg := c.InactiveBorderBg
+	thumbFg := c.ActiveBorderFg
+
+	for dy := 0; dy < trackH; dy++ {
+		y := trackTop + dy
+		if y < 0 || y >= buf.Height || trackX < 0 || trackX >= buf.Width {
+			continue
+		}
+		if dy >= thumbPos && dy < thumbPos+thumbH {
+			buf.SetCell(trackX, y, '▓', thumbFg, trackBg, 0)
+		} else {
+			buf.SetCell(trackX, y, '░', trackFg, trackBg, 0)
+		}
+	}
 }
 
 // RenderMenuBar draws the menu bar at the top of the buffer.
@@ -1412,6 +1525,7 @@ func RenderExpose(wm *window.Manager, theme config.Theme) *Buffer {
 		buf.SetString(x, y, msg, theme.ActiveTitleFg, theme.DesktopBg)
 		return buf
 	}
+	sort.Slice(visible, func(i, j int) bool { return visible[i].ID < visible[j].ID })
 
 	// Build window number map (1-based display number for each visible window)
 	winNumMap := make(map[string]int, n)
@@ -1500,13 +1614,37 @@ func RenderExposeTransition(wm *window.Manager, theme config.Theme, animations [
 		}
 	}
 
-	// Build window number map
-	winNumMap := make(map[string]int)
-	visIdx := 1
+	// Build window number map (sorted by ID for consistent numbering)
+	var transVisible []*window.Window
 	for _, w := range wm.Windows() {
 		if w.Visible && !w.Minimized {
-			winNumMap[w.ID] = visIdx
-			visIdx++
+			transVisible = append(transVisible, w)
+		}
+	}
+	sort.Slice(transVisible, func(i, j int) bool { return transVisible[i].ID < transVisible[j].ID })
+	winNumMap := make(map[string]int, len(transVisible))
+	for i, w := range transVisible {
+		winNumMap[w.ID] = i + 1
+	}
+
+	// Compute expose target rects as fallback for windows without animations.
+	// Without this, non-animated windows render at w.Rect (desktop position).
+	var focusedWin *window.Window
+	for _, w := range transVisible {
+		if w.Focused {
+			focusedWin = w
+			break
+		}
+	}
+	if focusedWin == nil && len(transVisible) > 0 {
+		focusedWin = transVisible[0]
+	}
+	exposeFallback := make(map[string]geometry.Rect)
+	if focusedWin != nil {
+		exposeFallback[focusedWin.ID] = exposeTargetRect(focusedWin, wa, true)
+		bgTargets := exposeBgTargets(transVisible, focusedWin.ID, wa)
+		for id, r := range bgTargets {
+			exposeFallback[id] = r
 		}
 	}
 
@@ -1515,23 +1653,25 @@ func RenderExposeTransition(wm *window.Manager, theme config.Theme, animations [
 		if !w.Visible || w.Minimized || w.Focused {
 			continue
 		}
-		renderExposeTransitionWindow(buf, theme, w, animMap, winNumMap[w.ID])
+		renderExposeTransitionWindow(buf, theme, w, animMap, exposeFallback, winNumMap[w.ID])
 	}
 	for _, w := range wm.Windows() {
 		if !w.Visible || w.Minimized || !w.Focused {
 			continue
 		}
-		renderExposeTransitionWindow(buf, theme, w, animMap, winNumMap[w.ID])
+		renderExposeTransitionWindow(buf, theme, w, animMap, exposeFallback, winNumMap[w.ID])
 	}
 
 	return buf
 }
 
-func renderExposeTransitionWindow(buf *Buffer, theme config.Theme, w *window.Window, animMap map[string]*Animation, winNum int) {
+func renderExposeTransitionWindow(buf *Buffer, theme config.Theme, w *window.Window, animMap map[string]*Animation, exposeFallback map[string]geometry.Rect, winNum int) {
 	r := w.Rect
 	if a, ok := animMap[w.ID]; ok {
 		t := easeOutCubic(a.Progress)
 		r = interpolateRect(a.StartRect, a.EndRect, t)
+	} else if fb, ok := exposeFallback[w.ID]; ok {
+		r = fb
 	}
 	if r.Width < 3 || r.Height < 3 {
 		return

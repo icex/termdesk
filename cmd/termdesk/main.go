@@ -33,6 +33,7 @@ func main() {
 			listSessions()
 			return
 		case "new":
+			checkNesting()
 			name := session.DefaultSession
 			if len(os.Args) > 2 {
 				name = os.Args[2]
@@ -40,6 +41,7 @@ func main() {
 			createAndAttach(name)
 			return
 		case "attach", "a":
+			checkNesting()
 			name := session.DefaultSession
 			if len(os.Args) > 2 {
 				name = os.Args[2]
@@ -60,6 +62,7 @@ func main() {
 	}
 
 	// Default: attach to existing "default" session, or create one
+	checkNesting()
 	createOrAttach(session.DefaultSession)
 }
 
@@ -200,6 +203,16 @@ func killSession(name string) {
 		os.Exit(1)
 	}
 	fmt.Printf("Killed session %q (pid %d)\n", name, pid)
+}
+
+// checkNesting exits with an error if we're already inside a termdesk session.
+// Internal subcommands (--app, --server) and read-only commands (ls, kill, help)
+// bypass this check — only user-facing session commands are blocked.
+func checkNesting() {
+	if os.Getenv("TERMDESK") == "1" {
+		fmt.Fprintln(os.Stderr, "termdesk: already running inside a termdesk session (nesting is not supported)")
+		os.Exit(1)
+	}
 }
 
 func printUsage() {

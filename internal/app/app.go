@@ -1,8 +1,10 @@
 package app
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -67,6 +69,10 @@ type Model struct {
 	cursorVisible bool            // cursor blink state (toggled every 500ms)
 	cursorBlinkAt time.Time       // last cursor blink toggle time
 	scrollOffset  int             // scrollback offset in Copy mode (0 = live)
+	selActive     bool            // selection in progress
+	selDragging   bool            // mouse drag selection in progress
+	selStart      geometry.Point  // selection start (X=col, Y=absLine)
+	selEnd        geometry.Point  // selection end (X=col, Y=absLine)
 	cache         *renderCache    // shared view cache (survives value-receiver copies)
 }
 
@@ -946,52 +952,255 @@ func (m Model) confirmAccept() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// mouseToAbsLine converts a content-area row to an absolute line number.
+// absLine 0 = oldest scrollback line, scrollbackLen = emulator row 0.
+func mouseToAbsLine(contentRow, scrollOffset, scrollbackLen, contentH int) int {
+	scrollLines := scrollOffset
+	if scrollLines > contentH {
+		scrollLines = contentH
+	}
+	if contentRow < scrollLines {
+		// In scrollback region: row 0 shows scrollback[scrollOffset-1]
+		return scrollbackLen - scrollOffset + contentRow
+	}
+	// In emulator region
+	emuRow := contentRow - scrollLines
+	return scrollbackLen + emuRow
+}
+
+// absLineToContentRow converts an absolute line to a content-area row (-1 if not visible).
+func absLineToContentRow(absLine, scrollOffset, scrollbackLen, contentH int) int {
+	scrollLines := scrollOffset
+	if scrollLines > contentH {
+		scrollLines = contentH
+	}
+	if absLine < scrollbackLen {
+		// Scrollback line
+		sbOffset := scrollbackLen - 1 - absLine // offset from most recent
+		if sbOffset < scrollOffset && sbOffset >= scrollOffset-scrollLines {
+			return scrollLines - 1 - (sbOffset - (scrollOffset - scrollLines))
+		}
+		// Simpler: the visible scrollback range is absLine in [scrollbackLen-scrollOffset, scrollbackLen-scrollOffset+scrollLines-1]
+		row := absLine - (scrollbackLen - scrollOffset)
+		if row >= 0 && row < scrollLines {
+			return row
+		}
+		return -1
+	}
+	// Emulator line
+	emuRow := absLine - scrollbackLen
+	row := scrollLines + emuRow
+	if row >= 0 && row < contentH {
+		return row
+	}
+	return -1
+}
+
+// extractSelText extracts text from the terminal between two selection points.
+func extractSelText(term *terminal.Terminal, start, end geometry.Point) string {
+	sbLen := term.ScrollbackLen()
+	termW := term.Width()
+	termH := term.Height()
+	totalLines := sbLen + termH
+
+	// Normalize: ensure start <= end
+	sLine, sCol := start.Y, start.X
+	eLine, eCol := end.Y, end.X
+	if sLine > eLine || (sLine == eLine && sCol > eCol) {
+		sLine, eLine = eLine, sLine
+		sCol, eCol = eCol, sCol
+	}
+
+	var lines []string
+	for line := sLine; line <= eLine && line < totalLines; line++ {
+		if line < 0 {
+			continue
+		}
+		colStart := 0
+		colEnd := termW
+		if line == sLine {
+			colStart = sCol
+		}
+		if line == eLine {
+			colEnd = eCol + 1
+		}
+		if colEnd > termW {
+			colEnd = termW
+		}
+		if colStart < 0 {
+			colStart = 0
+		}
+
+		var row strings.Builder
+		if line < sbLen {
+			sbOffset := sbLen - 1 - line
+			cells := term.ScrollbackLine(sbOffset)
+			for col := colStart; col < colEnd && col < len(cells); col++ {
+				if cells[col].Content != "" {
+					row.WriteString(cells[col].Content)
+				} else {
+					row.WriteByte(' ')
+				}
+			}
+		} else {
+			emuRow := line - sbLen
+			if emuRow < termH {
+				for col := colStart; col < colEnd; col++ {
+					cell := term.CellAt(col, emuRow)
+					if cell != nil && cell.Content != "" {
+						row.WriteString(cell.Content)
+					} else {
+						row.WriteByte(' ')
+					}
+				}
+			}
+		}
+		lines = append(lines, strings.TrimRight(row.String(), " "))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// writeOSC52 writes text to the system clipboard via OSC 52 escape sequence.
+func writeOSC52(text string) {
+	b64 := base64.StdEncoding.EncodeToString([]byte(text))
+	var seq []byte
+	seq = append(seq, "\x1b]52;c;"...)
+	seq = append(seq, b64...)
+	seq = append(seq, '\x07')
+	os.Stdout.Write(seq)
+}
+
 func (m Model) handleCopyModeKey(_ tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
 	fw := m.wm.FocusedWindow()
 	if fw == nil {
 		m.scrollOffset = 0
+		m.selActive = false
 		m.inputMode = ModeNormal
 		return m, nil
 	}
 	term := m.terminals[fw.ID]
 	if term == nil {
 		m.scrollOffset = 0
+		m.selActive = false
 		m.inputMode = ModeNormal
 		return m, nil
 	}
 	maxScroll := term.ScrollbackLen()
+	contentH := fw.ContentRect().Height
 
-	switch key {
-	case "esc", "escape", "q":
-		m.scrollOffset = 0
-		m.inputMode = ModeNormal
-	case "i":
-		m.scrollOffset = 0
-		m.inputMode = ModeTerminal
-	case "up", "k":
-		if m.scrollOffset < maxScroll {
-			m.scrollOffset++
-		}
-	case "down", "j":
-		if m.scrollOffset > 0 {
-			m.scrollOffset--
-		}
-	case "pgup":
-		page := term.Height()
-		m.scrollOffset += page
+	scroll := func(delta int) {
+		m.scrollOffset += delta
 		if m.scrollOffset > maxScroll {
 			m.scrollOffset = maxScroll
 		}
-	case "pgdown":
-		page := term.Height()
-		m.scrollOffset -= page
 		if m.scrollOffset < 0 {
 			m.scrollOffset = 0
 		}
+	}
+
+	switch key {
+	case "esc", "escape":
+		if m.selActive {
+			m.selActive = false
+		} else {
+			m.scrollOffset = 0
+			m.inputMode = ModeNormal
+		}
+	case "q":
+		m.scrollOffset = 0
+		m.selActive = false
+		m.inputMode = ModeNormal
+	case "i":
+		m.scrollOffset = 0
+		m.selActive = false
+		m.inputMode = ModeTerminal
+	case "v":
+		// Toggle visual selection mode
+		if m.selActive {
+			m.selActive = false
+		} else {
+			m.selActive = true
+			sbLen := term.ScrollbackLen()
+			// Start selection at center of visible area
+			midRow := contentH / 2
+			absLine := mouseToAbsLine(midRow, m.scrollOffset, sbLen, contentH)
+			m.selStart = geometry.Point{X: 0, Y: absLine}
+			m.selEnd = m.selStart
+		}
+	case "y", "enter":
+		// Yank (copy) selected text
+		if m.selActive {
+			text := extractSelText(term, m.selStart, m.selEnd)
+			if text != "" {
+				writeOSC52(text)
+			}
+			m.selActive = false
+			if key == "enter" {
+				m.scrollOffset = 0
+				m.inputMode = ModeTerminal
+			}
+		}
+	case "up", "k":
+		scroll(1)
+		if m.selActive {
+			if m.selEnd.Y > 0 {
+				m.selEnd.Y--
+			}
+		}
+	case "down", "j":
+		scroll(-1)
+		if m.selActive {
+			m.selEnd.Y++
+			totalLines := term.ScrollbackLen() + term.Height()
+			if m.selEnd.Y >= totalLines {
+				m.selEnd.Y = totalLines - 1
+			}
+		}
+	case "left", "h":
+		if m.selActive {
+			if m.selEnd.X > 0 {
+				m.selEnd.X--
+			}
+		}
+	case "right", "l":
+		if m.selActive {
+			m.selEnd.X++
+			if m.selEnd.X >= term.Width() {
+				m.selEnd.X = term.Width() - 1
+			}
+		}
+	case "pgup":
+		page := term.Height()
+		scroll(page)
+		if m.selActive {
+			m.selEnd.Y -= page
+			if m.selEnd.Y < 0 {
+				m.selEnd.Y = 0
+			}
+		}
+	case "pgdown":
+		page := term.Height()
+		scroll(-page)
+		if m.selActive {
+			m.selEnd.Y += page
+			totalLines := term.ScrollbackLen() + term.Height()
+			if m.selEnd.Y >= totalLines {
+				m.selEnd.Y = totalLines - 1
+			}
+		}
 	case "home", "g":
 		m.scrollOffset = maxScroll
+		if m.selActive {
+			m.selEnd.Y = 0
+			m.selEnd.X = 0
+		}
 	case "end", "shift+g":
 		m.scrollOffset = 0
+		if m.selActive {
+			totalLines := term.ScrollbackLen() + term.Height()
+			m.selEnd.Y = totalLines - 1
+			m.selEnd.X = term.Width() - 1
+		}
 	}
 	return m, nil
 }
@@ -1336,10 +1545,19 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		return m, tickAnimation()
 
 	case window.HitContent:
-		// In Copy mode, clicks should NOT enter terminal mode.
-		// (Future: click will start text selection.)
+		// In Copy mode, clicks start text selection.
 		if m.inputMode == ModeCopy {
-			// Stay in copy mode — click handled as selection start (TODO)
+			if term, ok := m.terminals[w.ID]; ok {
+				cr := w.ContentRect()
+				localX := mouse.X - cr.X
+				localY := mouse.Y - cr.Y
+				sbLen := term.ScrollbackLen()
+				absLine := mouseToAbsLine(localY, m.scrollOffset, sbLen, cr.Height)
+				m.selStart = geometry.Point{X: localX, Y: absLine}
+				m.selEnd = m.selStart
+				m.selActive = true
+				m.selDragging = true
+			}
 		} else {
 			// Clicking on terminal content enters Terminal mode
 			if _, ok := m.terminals[w.ID]; ok {
@@ -1374,6 +1592,33 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleMouseMotion(mouse tea.Mouse) (tea.Model, tea.Cmd) {
+	// Copy mode: extend selection on drag
+	if m.inputMode == ModeCopy && m.selDragging {
+		if fw := m.wm.FocusedWindow(); fw != nil {
+			if term, ok := m.terminals[fw.ID]; ok {
+				cr := fw.ContentRect()
+				localX := mouse.X - cr.X
+				localY := mouse.Y - cr.Y
+				if localX < 0 {
+					localX = 0
+				}
+				if localX >= term.Width() {
+					localX = term.Width() - 1
+				}
+				if localY < 0 {
+					localY = 0
+				}
+				if localY >= cr.Height {
+					localY = cr.Height - 1
+				}
+				sbLen := term.ScrollbackLen()
+				absLine := mouseToAbsLine(localY, m.scrollOffset, sbLen, cr.Height)
+				m.selEnd = geometry.Point{X: localX, Y: absLine}
+			}
+		}
+		return m, nil
+	}
+
 	// Update dock hover
 	if mouse.Y == m.height-1 {
 		m.dock.SetHover(m.dock.ItemAtX(mouse.X))
@@ -1418,6 +1663,16 @@ func (m Model) handleMouseMotion(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleMouseRelease(mouse tea.Mouse) (tea.Model, tea.Cmd) {
+	// Finalize selection drag in copy mode
+	if m.selDragging {
+		m.selDragging = false
+		// If start == end (just a click with no drag), clear selection
+		if m.selStart == m.selEnd {
+			m.selActive = false
+		}
+		return m, nil
+	}
+
 	if m.drag.Active {
 		// Resize terminal after drag completes
 		w := m.wm.WindowByID(m.drag.WindowID)
@@ -1666,6 +1921,11 @@ func (m *Model) openDemoWindow() {
 	m.wm.AddWindow(win)
 }
 
+// sortVisibleByID sorts a window slice by ID for consistent expose strip ordering.
+func sortVisibleByID(visible []*window.Window) {
+	sort.Slice(visible, func(i, j int) bool { return visible[i].ID < visible[j].ID })
+}
+
 // enterExpose transitions into exposé mode with animations.
 func (m *Model) enterExpose() {
 	m.exposeMode = true
@@ -1683,6 +1943,7 @@ func (m *Model) enterExpose() {
 	if len(visible) == 0 {
 		return
 	}
+	sortVisibleByID(visible)
 	if focusedWin == nil {
 		focusedWin = visible[0]
 	}
@@ -1717,6 +1978,7 @@ func (m *Model) exitExpose() {
 	if len(visible) == 0 {
 		return
 	}
+	sortVisibleByID(visible)
 	if focusedWin == nil {
 		focusedWin = visible[0]
 	}
@@ -1735,59 +1997,50 @@ func (m *Model) exitExpose() {
 }
 
 // cycleExposeWindow animates switching focus in exposé mode.
-// direction: +1 = forward, -1 = backward.
+// direction: +1 = forward (right), -1 = backward (left).
+// Uses ID-sorted visible list for consistent strip ordering so that
+// forward cycling visually moves windows in one direction and backward
+// cycling moves them in the opposite direction.
 func (m *Model) cycleExposeWindow(direction int) {
 	wa := m.wm.WorkArea()
 	var visible []*window.Window
-	var oldFocused *window.Window
 	for _, w := range m.wm.Windows() {
 		if w.Visible && !w.Minimized {
 			visible = append(visible, w)
-			if w.Focused {
-				oldFocused = w
-			}
 		}
 	}
-	if len(visible) < 2 || oldFocused == nil {
-		if direction > 0 {
-			m.wm.CycleForward()
-		} else {
-			m.wm.CycleBackward()
-		}
+	if len(visible) < 2 {
 		return
 	}
+	sortVisibleByID(visible)
 
-	// Compute old focused window's center target rect (where it currently is)
-	oldCenterRect := exposeTargetRect(oldFocused, wa, true)
-
-	// Cycle focus
-	if direction > 0 {
-		m.wm.CycleForward()
-	} else {
-		m.wm.CycleBackward()
-	}
-
-	var newFocused *window.Window
-	for _, w := range visible {
+	// Find old focused window in sorted list
+	oldFocusedIdx := -1
+	var oldFocused *window.Window
+	for i, w := range visible {
 		if w.Focused {
-			newFocused = w
+			oldFocusedIdx = i
+			oldFocused = w
 			break
 		}
 	}
-	if newFocused == nil || newFocused.ID == oldFocused.ID {
+	if oldFocused == nil {
 		return
 	}
 
-	// Where the new focused window currently is in the bg strip
-	bgTargets := exposeBgTargets(visible, newFocused.ID, wa)
-	newBgRect, ok := bgTargets[oldFocused.ID]
-	if !ok {
-		// Old focused goes to some position in the strip — recalculate with new focus
-		bgTargets = exposeBgTargets(visible, newFocused.ID, wa)
-		newBgRect = bgTargets[oldFocused.ID]
-	}
+	// Cycle through sorted list (not z-order)
+	newIdx := (oldFocusedIdx + direction + len(visible)) % len(visible)
+	newFocused := visible[newIdx]
+	m.wm.FocusWindow(newFocused.ID)
 
-	// Where the new focused window was in the old bg strip
+	// Compute old focused window's center rect (where it currently is)
+	oldCenterRect := exposeTargetRect(oldFocused, wa, true)
+
+	// Where old focused goes in new strip (with newFocused as center)
+	bgTargets := exposeBgTargets(visible, newFocused.ID, wa)
+	newBgRect := bgTargets[oldFocused.ID]
+
+	// Where new focused was in old strip (with oldFocused as center)
 	oldBgTargets := exposeBgTargets(visible, oldFocused.ID, wa)
 	newOldBgRect := oldBgTargets[newFocused.ID]
 
@@ -1898,6 +2151,7 @@ func (m *Model) selectExposeWindow(mouseX, mouseY int) {
 	if len(visible) == 0 {
 		return
 	}
+	sortVisibleByID(visible)
 	if focusedWin == nil {
 		focusedWin = visible[0]
 	}
@@ -1965,6 +2219,7 @@ func (m *Model) selectExposeByIndex(idx int) {
 			visible = append(visible, w)
 		}
 	}
+	sortVisibleByID(visible)
 	if idx >= 0 && idx < len(visible) {
 		m.wm.FocusWindow(visible[idx].ID)
 	}
@@ -2119,23 +2374,32 @@ func (m *Model) helpOverlay() *ModalOverlay {
 	copyMode := HelpTab{
 		Title: "Copy",
 		Lines: []string{
-			"COPY mode (scrollback navigation):",
+			"COPY mode (scrollback + selection):",
 			"",
 			"  Enter Copy mode from Normal: c",
 			"  Enter Copy mode from Terminal: Pfx+c",
 			"",
-			"  Up / k        Scroll up one line",
+			"  SCROLLING:",
+			"  Up / k         Scroll up one line",
 			"  Down / j       Scroll down one line",
-			"  PgUp          Scroll up one page",
+			"  PgUp           Scroll up one page",
 			"  PgDown         Scroll down one page",
 			"  Home / g       Scroll to oldest line",
 			"  End / G        Scroll to newest (live)",
 			"",
+			"  TEXT SELECTION:",
+			"  v              Toggle visual selection",
+			"  h / l          Move selection left/right",
+			"  j / k          Move selection + scroll",
+			"  y              Copy selection (OSC 52)",
+			"  Enter          Copy + return to Terminal",
+			"  Mouse drag     Select text with mouse",
+			"  Esc            Clear selection",
+			"",
 			"  Esc / q        Exit to Normal mode",
 			"  i              Exit to Terminal mode",
 			"",
-			"  A scroll indicator [↑ N/M] appears in",
-			"  the window bottom border when scrolled.",
+			"  Scrollbar appears on the right border.",
 		},
 	}
 
@@ -2402,7 +2666,13 @@ func (m Model) View() tea.View {
 	if m.inputMode == ModeCopy {
 		scrollOff = m.scrollOffset
 	}
-	buf := RenderFrame(m.wm, m.theme, m.terminals, animRects, showCursor, scrollOff)
+	sel := SelectionInfo{
+		Active:   m.selActive,
+		Start:    m.selStart,
+		End:      m.selEnd,
+		CopyMode: m.inputMode == ModeCopy,
+	}
+	buf := RenderFrame(m.wm, m.theme, m.terminals, animRects, showCursor, scrollOff, sel)
 	RenderMenuBar(buf, m.menuBar, m.theme, m.inputMode, m.prefixPending)
 	RenderDock(buf, m.dock, m.theme, m.animations)
 	if m.launcher.Visible {

@@ -30,7 +30,8 @@ type MenuBar struct {
 	ShowCPU     bool
 	ShowMemory  bool
 	ShowBattery bool
-	CPUPct      float64 // current CPU percentage
+	CPUPct      float64   // current CPU percentage
+	CPUHistory  []float64 // rolling history for sparkline (last 20 samples)
 	MemGB       float64 // current memory usage in GB
 	BatPct      float64 // battery percentage
 	BatCharging bool    // battery is charging

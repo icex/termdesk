@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -57,6 +58,7 @@ type Model struct {
 	prefixPending bool            // true when prefix key pressed, waiting for action
 	cursorVisible bool            // cursor blink state (toggled every 500ms)
 	cursorBlinkAt time.Time       // last cursor blink toggle time
+	scrollOffset  int             // scrollback offset in Copy mode (0 = live)
 }
 
 // ConfirmDialog represents a confirmation dialog overlay.
@@ -275,6 +277,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.menuBar.BatPct = msg.BatPct
 		m.menuBar.BatCharging = msg.BatCharging
 		m.menuBar.BatPresent = msg.BatPresent
+		// Push CPU to rolling history (max 20 samples)
+		m.menuBar.CPUHistory = append(m.menuBar.CPUHistory, msg.CPU)
+		if len(m.menuBar.CPUHistory) > 20 {
+			m.menuBar.CPUHistory = m.menuBar.CPUHistory[1:]
+		}
 		return m, m.tickSystemStats()
 
 	case AnimationTickMsg:
@@ -879,15 +886,52 @@ func (m Model) confirmAccept() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleCopyModeKey(_ tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
-	switch key {
-	case "esc", "escape", "q":
+	fw := m.wm.FocusedWindow()
+	if fw == nil {
+		m.scrollOffset = 0
 		m.inputMode = ModeNormal
 		return m, nil
-	case "i":
-		m.inputMode = ModeTerminal
+	}
+	term := m.terminals[fw.ID]
+	if term == nil {
+		m.scrollOffset = 0
+		m.inputMode = ModeNormal
 		return m, nil
 	}
-	// TODO: vim-style navigation, selection, yank
+	maxScroll := term.ScrollbackLen()
+
+	switch key {
+	case "esc", "escape", "q":
+		m.scrollOffset = 0
+		m.inputMode = ModeNormal
+	case "i":
+		m.scrollOffset = 0
+		m.inputMode = ModeTerminal
+	case "up", "k":
+		if m.scrollOffset < maxScroll {
+			m.scrollOffset++
+		}
+	case "down", "j":
+		if m.scrollOffset > 0 {
+			m.scrollOffset--
+		}
+	case "pgup":
+		page := term.Height()
+		m.scrollOffset += page
+		if m.scrollOffset > maxScroll {
+			m.scrollOffset = maxScroll
+		}
+	case "pgdown":
+		page := term.Height()
+		m.scrollOffset -= page
+		if m.scrollOffset < 0 {
+			m.scrollOffset = 0
+		}
+	case "home", "g":
+		m.scrollOffset = maxScroll
+	case "end", "shift+g":
+		m.scrollOffset = 0
+	}
 	return m, nil
 }
 
@@ -1447,7 +1491,8 @@ func (m *Model) openTerminalWindowWith(command string, args []string) tea.Cmd {
 	// Spawn background reader goroutine — reads PTY output and sends messages
 	// via program.Send(). Rate-limited: at most one PtyOutputMsg per 8ms (~120fps)
 	// to avoid flooding Bubble Tea with re-renders during burst output (e.g. dmesg).
-	// A trailing timer ensures the final chunk is always rendered.
+	// Uses time.AfterFunc which fires in its own goroutine — unlike time.NewTimer,
+	// its callback runs even while ReadOnce blocks on PTY read.
 	if m.progRef != nil && m.progRef.p != nil {
 		p := m.progRef.p
 		go func() {
@@ -1455,41 +1500,46 @@ func (m *Model) openTerminalWindowWith(command string, args []string) tea.Cmd {
 				recover() // prevent panics from crashing the entire app
 				p.Send(PtyClosedMsg{WindowID: id})
 			}()
-			var lastSend time.Time
+			var (
+				mu       sync.Mutex
+				lastSend time.Time
+				pending  *time.Timer
+			)
 			const minInterval = 8 * time.Millisecond
-			flushTimer := time.NewTimer(0)
-			if !flushTimer.Stop() {
-				<-flushTimer.C
-			}
-			dirty := false
+			readBuf := make([]byte, 32768)
 			for {
-				n, err := term.ReadOnce()
+				n, err := term.ReadOnce(readBuf)
 				if n > 0 {
+					mu.Lock()
 					now := time.Now()
 					if now.Sub(lastSend) >= minInterval {
-						p.Send(PtyOutputMsg{WindowID: id})
+						if pending != nil {
+							pending.Stop()
+							pending = nil
+						}
 						lastSend = now
-						dirty = false
-						flushTimer.Stop()
-					} else if !dirty {
-						dirty = true
-						flushTimer.Reset(minInterval)
-					}
-				}
-				// Drain trailing flush timer in non-blocking select
-				select {
-				case <-flushTimer.C:
-					if dirty {
+						mu.Unlock()
 						p.Send(PtyOutputMsg{WindowID: id})
-						lastSend = time.Now()
-						dirty = false
+					} else if pending == nil {
+						pending = time.AfterFunc(minInterval, func() {
+							mu.Lock()
+							pending = nil
+							lastSend = time.Now()
+							mu.Unlock()
+							p.Send(PtyOutputMsg{WindowID: id})
+						})
+						mu.Unlock()
+					} else {
+						mu.Unlock()
 					}
-				default:
 				}
 				if err != nil {
-					if dirty {
-						p.Send(PtyOutputMsg{WindowID: id})
+					mu.Lock()
+					if pending != nil {
+						pending.Stop()
 					}
+					mu.Unlock()
+					p.Send(PtyOutputMsg{WindowID: id})
 					p.Send(PtyClosedMsg{WindowID: id, Err: err})
 					return
 				}
@@ -2197,7 +2247,12 @@ func (m Model) View() tea.View {
 	}
 	// Cursor blinks in Terminal mode, always visible otherwise
 	showCursor := m.inputMode != ModeTerminal || m.cursorVisible
-	buf := RenderFrame(m.wm, m.theme, m.terminals, animRects, showCursor)
+	// Only pass scrollOffset when in Copy mode
+	scrollOff := 0
+	if m.inputMode == ModeCopy {
+		scrollOff = m.scrollOffset
+	}
+	buf := RenderFrame(m.wm, m.theme, m.terminals, animRects, showCursor, scrollOff)
 	RenderMenuBar(buf, m.menuBar, m.theme, m.inputMode, m.prefixPending)
 	RenderDock(buf, m.dock, m.theme, m.animations)
 	if m.launcher.Visible {

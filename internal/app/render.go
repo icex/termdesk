@@ -117,7 +117,8 @@ func (b *Buffer) FillRect(r geometry.Rect, char rune, fg, bg string) {
 
 // RenderWindow draws a single window (border + title bar + content) into the buffer.
 // showCursor controls whether the terminal cursor is rendered (false = blink-off phase).
-func RenderWindow(buf *Buffer, w *window.Window, theme config.Theme, term *terminal.Terminal, showCursor bool) {
+// scrollOffset > 0 shows scrollback lines in Copy mode.
+func RenderWindow(buf *Buffer, w *window.Window, theme config.Theme, term *terminal.Terminal, showCursor bool, scrollOffset int) {
 	if !w.Visible || w.Minimized {
 		return
 	}
@@ -242,11 +243,29 @@ func RenderWindow(buf *Buffer, w *window.Window, theme config.Theme, term *termi
 		}
 		// Default FG: light gray text for cells with no explicit foreground
 		defaultFg := hexToColor("#C0C0C0")
-		renderTerminalContent(buf, contentRect, term, defaultFg, hexToColor(cbg))
+		renderTerminalContent(buf, contentRect, term, defaultFg, hexToColor(cbg), scrollOffset)
+
+		// Show scroll indicator in bottom border when scrolled back
+		if scrollOffset > 0 {
+			maxScroll := term.ScrollbackLen()
+			indicator := fmt.Sprintf(" [↑ %d/%d] ", scrollOffset, maxScroll)
+			indicatorRunes := []rune(indicator)
+			borderY := w.Rect.Bottom() - 1
+			startX := w.Rect.X + (w.Rect.Width-len(indicatorRunes))/2
+			for i, ch := range indicatorRunes {
+				x := startX + i
+				if x > w.Rect.X && x < w.Rect.Right()-1 {
+					borderFgC := hexToColor(theme.ActiveBorderFg)
+					borderBgC := hexToColor(theme.ActiveBorderBg)
+					buf.SetCell(x, borderY, ch, borderFgC, borderBgC, 0)
+				}
+			}
+		}
 
 		// Show cursor for focused terminal windows — invert fg/bg at cursor position.
 		// Respect the app's cursor visibility (DECTCEM): btop/htop hide it.
-		if w.Focused && showCursor && !term.IsCursorHidden() {
+		// Don't show cursor when scrolled back (viewing history, not live).
+		if w.Focused && showCursor && !term.IsCursorHidden() && scrollOffset == 0 {
 			cx, cy := term.CursorPosition()
 			sx := contentRect.X + cx
 			sy := contentRect.Y + cy
@@ -276,13 +295,81 @@ func RenderWindow(buf *Buffer, w *window.Window, theme config.Theme, term *termi
 
 // renderTerminalContent copies the VT emulator screen into the buffer using per-cell access.
 // defaultFg/defaultBg are used when the VT cell has nil colors (terminal default).
-func renderTerminalContent(buf *Buffer, area geometry.Rect, term *terminal.Terminal, defaultFg, defaultBg color.Color) {
+// scrollOffset > 0 means we're viewing scrollback: top portion shows scrollback lines,
+// bottom portion shows the emulator's visible screen (minus scrollOffset rows from top).
+func renderTerminalContent(buf *Buffer, area geometry.Rect, term *terminal.Terminal, defaultFg, defaultBg color.Color, scrollOffset int) {
 	if term == nil {
 		return
 	}
 	termW := term.Width()
 	termH := term.Height()
-	for dy := 0; dy < area.Height && dy < termH; dy++ {
+
+	if scrollOffset <= 0 {
+		// Live view — render directly from emulator
+		for dy := 0; dy < area.Height && dy < termH; dy++ {
+			for dx := 0; dx < area.Width && dx < termW; dx++ {
+				cell := term.CellAt(dx, dy)
+				if cell == nil {
+					continue
+				}
+				ch := ' '
+				if cell.Content != "" {
+					runes := []rune(cell.Content)
+					ch = runes[0]
+				}
+				bg := cell.Style.Bg
+				if bg == nil {
+					bg = defaultBg
+				}
+				fg := cell.Style.Fg
+				if fg == nil {
+					fg = defaultFg
+				}
+				buf.SetCell(area.X+dx, area.Y+dy, ch, fg, bg, cell.Style.Attrs)
+			}
+		}
+		return
+	}
+
+	// Scrollback view: compose scrollback lines + visible screen
+	// scrollOffset=5, screen height=24 → show 5 scrollback lines at top + top 19 emulator rows
+	scrollLines := scrollOffset
+	if scrollLines > area.Height {
+		scrollLines = area.Height
+	}
+	emuLines := area.Height - scrollLines
+
+	// Render scrollback lines at the top
+	for dy := 0; dy < scrollLines; dy++ {
+		// scrollback offset: most recent scrollback line = offset 0
+		// We want the topmost display row to show the oldest of the visible scrollback range
+		sbIdx := scrollOffset - 1 - dy
+		line := term.ScrollbackLine(sbIdx)
+		for dx := 0; dx < area.Width; dx++ {
+			if line != nil && dx < len(line) {
+				sc := line[dx]
+				ch := ' '
+				if sc.Content != "" {
+					runes := []rune(sc.Content)
+					ch = runes[0]
+				}
+				fg := sc.Fg
+				if fg == nil {
+					fg = defaultFg
+				}
+				bg := sc.Bg
+				if bg == nil {
+					bg = defaultBg
+				}
+				buf.SetCell(area.X+dx, area.Y+dy, ch, fg, bg, sc.Attrs)
+			} else {
+				buf.SetCell(area.X+dx, area.Y+dy, ' ', defaultFg, defaultBg, 0)
+			}
+		}
+	}
+
+	// Render emulator rows below the scrollback
+	for dy := 0; dy < emuLines && dy < termH; dy++ {
 		for dx := 0; dx < area.Width && dx < termW; dx++ {
 			cell := term.CellAt(dx, dy)
 			if cell == nil {
@@ -301,7 +388,7 @@ func renderTerminalContent(buf *Buffer, area geometry.Rect, term *terminal.Termi
 			if fg == nil {
 				fg = defaultFg
 			}
-			buf.SetCell(area.X+dx, area.Y+dy, ch, fg, bg, cell.Style.Attrs)
+			buf.SetCell(area.X+dx, area.Y+scrollLines+dy, ch, fg, bg, cell.Style.Attrs)
 		}
 	}
 }
@@ -362,7 +449,7 @@ func stripANSI(s string) []rune {
 // RenderFrame composites all windows using the painter's algorithm.
 // Windows are drawn back-to-front in z-order.
 // animRects provides animated rect overrides for windows currently animating.
-func RenderFrame(wm *window.Manager, theme config.Theme, terminals map[string]*terminal.Terminal, animRects map[string]geometry.Rect, showCursor bool) *Buffer {
+func RenderFrame(wm *window.Manager, theme config.Theme, terminals map[string]*terminal.Terminal, animRects map[string]geometry.Rect, showCursor bool, scrollOffset int) *Buffer {
 	wa := wm.WorkArea()
 	// Use full terminal bounds for the buffer (includes reserved rows for menu/dock)
 	fullWidth := wa.Width
@@ -379,19 +466,24 @@ func RenderFrame(wm *window.Manager, theme config.Theme, terminals map[string]*t
 		if terminals != nil {
 			term = terminals[w.ID]
 		}
+		// Only apply scrollOffset to the focused window
+		winScroll := 0
+		if w.Focused {
+			winScroll = scrollOffset
+		}
 		// Use animated rect if available
 		if animRect, ok := animRects[w.ID]; ok {
 			origRect := w.Rect
 			w.Rect = animRect
 			// Skip terminal content during close animation (window is shrinking)
 			if animRect.Width <= 3 || animRect.Height <= 3 {
-				RenderWindow(buf, w, theme, nil, showCursor)
+				RenderWindow(buf, w, theme, nil, showCursor, 0)
 			} else {
-				RenderWindow(buf, w, theme, term, showCursor)
+				RenderWindow(buf, w, theme, term, showCursor, winScroll)
 			}
 			w.Rect = origRect // restore for state consistency
 		} else {
-			RenderWindow(buf, w, theme, term, showCursor)
+			RenderWindow(buf, w, theme, term, showCursor, winScroll)
 		}
 	}
 

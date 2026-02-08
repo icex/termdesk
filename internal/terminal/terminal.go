@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"image/color"
 	"io"
 	"os"
 	"sync"
@@ -8,6 +9,16 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/vt"
 )
+
+// ScreenCell captures a single cell's content and style for scrollback storage.
+type ScreenCell struct {
+	Content string
+	Fg      color.Color
+	Bg      color.Color
+	Attrs   uint8
+}
+
+const defaultScrollbackCap = 1000
 
 // Terminal combines a PTY session with a VT emulator.
 type Terminal struct {
@@ -17,6 +28,11 @@ type Terminal struct {
 	cursorHidden bool // tracks whether the child app hid the cursor (DECTCEM)
 	mu           sync.Mutex
 	writeCh      chan []byte // buffered write channel for raw PTY input
+	emuCh        chan []byte // async emulator write channel
+
+	// Scrollback buffer — lines that scrolled off the top of the screen.
+	scrollback [][]ScreenCell // oldest first
+	scrollCap  int            // max scrollback lines
 }
 
 // New creates a terminal running the given command.
@@ -29,9 +45,11 @@ func New(command string, args []string, cols, rows int) (*Terminal, error) {
 	emu := vt.NewSafeEmulator(cols, rows)
 
 	t := &Terminal{
-		pty:     p,
-		emu:     emu,
-		writeCh: make(chan []byte, 256),
+		pty:       p,
+		emu:       emu,
+		writeCh:   make(chan []byte, 256),
+		emuCh:     make(chan []byte, 128),
+		scrollCap: defaultScrollbackCap,
 	}
 
 	// Track cursor visibility via emulator callback (DECTCEM mode).
@@ -47,6 +65,10 @@ func New(command string, args []string, cols, rows int) (*Terminal, error) {
 	// Spawn writer goroutine — drains writeCh and writes to PTY.
 	// This keeps WriteInput non-blocking.
 	go t.writeLoop()
+
+	// Spawn async emulator writer — decouples PTY reads from emulator processing.
+	// This eliminates SafeEmulator write-lock contention with CellAt reads during rendering.
+	go t.emuWriteLoop()
 
 	// Spawn input forwarder — reads encoded input from the emulator's pipe
 	// (filled by SendKey/SendMouse) and writes to PTY.
@@ -79,7 +101,9 @@ func (t *Terminal) ReadPtyLoop() error {
 
 		n, err := t.pty.Read(buf)
 		if n > 0 {
-			t.emu.Write(buf[:n])
+			data := make([]byte, n)
+			copy(data, buf[:n])
+			t.emuCh <- data
 		}
 		if err != nil {
 			if err == io.EOF {
@@ -90,9 +114,10 @@ func (t *Terminal) ReadPtyLoop() error {
 	}
 }
 
-// ReadOnce reads one chunk from the PTY and feeds it to the emulator.
+// ReadOnce reads one chunk from the PTY and feeds it to the emulator asynchronously.
+// The caller provides a reusable buffer to avoid per-call allocation.
 // Returns (bytesRead, error). Use this for event-driven reading.
-func (t *Terminal) ReadOnce() (int, error) {
+func (t *Terminal) ReadOnce(buf []byte) (int, error) {
 	t.mu.Lock()
 	closed := t.closed
 	t.mu.Unlock()
@@ -100,12 +125,108 @@ func (t *Terminal) ReadOnce() (int, error) {
 		return 0, io.EOF
 	}
 
-	buf := make([]byte, 32768)
 	n, err := t.pty.Read(buf)
 	if n > 0 {
-		t.emu.Write(buf[:n])
+		data := make([]byte, n)
+		copy(data, buf[:n])
+		select {
+		case t.emuCh <- data:
+		default:
+			// Channel full — emulator is behind, drop to keep PTY reads flowing.
+		}
 	}
 	return n, err
+}
+
+// emuWriteLoop drains the async emulator channel and writes to the emulator.
+// Before each write, it snapshots the top row to detect scrolling and capture
+// lines into the scrollback buffer.
+func (t *Terminal) emuWriteLoop() {
+	for data := range t.emuCh {
+		// Snapshot the top row before writing — if it changes, it scrolled off.
+		topBefore := t.snapshotRow(0)
+
+		t.emu.Write(data)
+
+		// After write, check if the top row changed (indicating scroll).
+		topAfter := t.snapshotRow(0)
+		if topBefore != nil && !rowEqual(topBefore, topAfter) {
+			t.mu.Lock()
+			t.scrollback = append(t.scrollback, topBefore)
+			if len(t.scrollback) > t.scrollCap {
+				// Trim oldest lines
+				excess := len(t.scrollback) - t.scrollCap
+				copy(t.scrollback, t.scrollback[excess:])
+				t.scrollback = t.scrollback[:t.scrollCap]
+			}
+			t.mu.Unlock()
+		}
+	}
+}
+
+// snapshotRow captures a single row from the emulator as ScreenCells.
+func (t *Terminal) snapshotRow(row int) []ScreenCell {
+	w := t.emu.Width()
+	if w <= 0 {
+		return nil
+	}
+	cells := make([]ScreenCell, w)
+	empty := true
+	for x := 0; x < w; x++ {
+		cell := t.emu.CellAt(x, row)
+		if cell == nil {
+			cells[x] = ScreenCell{Content: " "}
+			continue
+		}
+		cells[x] = ScreenCell{
+			Content: cell.Content,
+			Fg:      cell.Style.Fg,
+			Bg:      cell.Style.Bg,
+			Attrs:   cell.Style.Attrs,
+		}
+		if cell.Content != "" && cell.Content != " " {
+			empty = false
+		}
+	}
+	if empty {
+		return nil // don't store blank lines
+	}
+	return cells
+}
+
+// rowEqual compares two ScreenCell rows for equality.
+func rowEqual(a, b []ScreenCell) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Content != b[i].Content {
+			return false
+		}
+	}
+	return true
+}
+
+// ScrollbackLen returns the number of lines in the scrollback buffer.
+func (t *Terminal) ScrollbackLen() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.scrollback)
+}
+
+// ScrollbackLine returns a scrollback line by offset from the bottom.
+// offset 0 = most recent scrollback line (just above visible screen).
+func (t *Terminal) ScrollbackLine(offset int) []ScreenCell {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	idx := len(t.scrollback) - 1 - offset
+	if idx < 0 || idx >= len(t.scrollback) {
+		return nil
+	}
+	// Return a copy to avoid races.
+	line := make([]ScreenCell, len(t.scrollback[idx]))
+	copy(line, t.scrollback[idx])
+	return line
 }
 
 // WriteInput sends raw bytes to the PTY (keyboard input).
@@ -297,6 +418,7 @@ func (t *Terminal) Close() error {
 	}
 	t.closed = true
 	close(t.writeCh)
+	close(t.emuCh)
 	return t.pty.Close()
 }
 

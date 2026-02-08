@@ -86,9 +86,9 @@ func NewShell(cols, rows int) (*Terminal, error) {
 	return New(shell, nil, cols, rows)
 }
 
-// ReadPtyLoop reads from the PTY and writes to the emulator.
+// ReadPtyLoop reads from the PTY and writes to the emulator synchronously.
 // It returns when the PTY is closed or an error occurs.
-// Call this from a goroutine.
+// Call this from a goroutine. Used primarily in tests.
 func (t *Terminal) ReadPtyLoop() error {
 	buf := make([]byte, 4096)
 	for {
@@ -101,9 +101,7 @@ func (t *Terminal) ReadPtyLoop() error {
 
 		n, err := t.pty.Read(buf)
 		if n > 0 {
-			data := make([]byte, n)
-			copy(data, buf[:n])
-			t.emuCh <- data
+			t.emu.Write(buf[:n])
 		}
 		if err != nil {
 			if err == io.EOF {

@@ -322,7 +322,7 @@ func (mb *MenuBar) RightZones(totalWidth int) []RightSideZone {
 	var zones []RightSideZone
 	x := startX + 1 // skip leading space
 	if mb.ShowCPU {
-		s := FormatCPU(mb.CPUPct)
+		s := FormatCPU(mb.CPUPct) + FormatCPUChart(mb.CPUHistory)
 		w := len([]rune(s))
 		zones = append(zones, RightSideZone{Start: x, End: x + w, Type: "cpu"})
 		x += w + 1 // +1 for space separator
@@ -351,7 +351,8 @@ func (mb *MenuBar) renderRight() string {
 	var parts []string
 
 	if mb.ShowCPU {
-		parts = append(parts, FormatCPU(mb.CPUPct))
+		s := FormatCPU(mb.CPUPct) + FormatCPUChart(mb.CPUHistory)
+		parts = append(parts, s)
 	}
 	if mb.ShowMemory {
 		parts = append(parts, FormatMemory(mb.MemGB))
@@ -422,6 +423,40 @@ func BatColorLevel(pct float64) string {
 		return "yellow"
 	}
 	return "red"
+}
+
+const cpuChartWidth = 20
+
+// FormatCPUChart returns a fixed-width sparkline string from the CPU history.
+// Always returns exactly cpuChartWidth characters, padding with spaces on the left
+// so the menu bar layout doesn't shift as samples accumulate.
+func FormatCPUChart(history []float64) string {
+	blocks := []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
+	result := make([]rune, cpuChartWidth)
+	// Fill with spaces first
+	for i := range result {
+		result[i] = ' '
+	}
+	// Right-align the actual data
+	start := cpuChartWidth - len(history)
+	if start < 0 {
+		start = 0
+	}
+	for i, pct := range history {
+		pos := start + i
+		if pos >= cpuChartWidth {
+			break
+		}
+		idx := int(pct / 100.0 * 7)
+		if idx > 7 {
+			idx = 7
+		}
+		if idx < 0 {
+			idx = 0
+		}
+		result[pos] = blocks[idx]
+	}
+	return string(result)
 }
 
 // CPUColorLevel returns a color level: "green", "yellow", or "red" based on CPU usage.

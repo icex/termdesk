@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -71,9 +73,10 @@ type Model struct {
 	scrollOffset  int             // scrollback offset in Copy mode (0 = live)
 	selActive     bool            // selection in progress
 	selDragging   bool            // mouse drag selection in progress
-	selStart      geometry.Point  // selection start (X=col, Y=absLine)
-	selEnd        geometry.Point  // selection end (X=col, Y=absLine)
-	cache         *renderCache    // shared view cache (survives value-receiver copies)
+	selStart       geometry.Point  // selection start (X=col, Y=absLine)
+	selEnd         geometry.Point  // selection end (X=col, Y=absLine)
+	cache          *renderCache    // shared view cache (survives value-receiver copies)
+	animationsOn   bool            // animations enabled (persisted in config)
 }
 
 // ConfirmDialog represents a confirmation dialog overlay.
@@ -218,7 +221,7 @@ func New() Model {
 	d := dock.New(80)
 	d.IconsOnly = userCfg.IconsOnly
 	am := BuildActionMap(userCfg.Keys)
-	return Model{
+	m := Model{
 		wm:            window.NewManager(80, 24),
 		theme:         theme,
 		terminals:     make(map[string]*terminal.Terminal),
@@ -231,7 +234,10 @@ func New() Model {
 		cursorVisible: true,
 		cursorBlinkAt: time.Now(),
 		cache:         &renderCache{updateGen: 1},
+		animationsOn:  userCfg.Animations,
 	}
+	m.updateSettingsMenuLabels()
+	return m
 }
 
 // SetProgram sets the tea.Program reference for background goroutine messaging.
@@ -1259,6 +1265,29 @@ func (m Model) handleMenuKey(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// updateSettingsMenuLabels updates View menu item labels to reflect current settings.
+func (m *Model) updateSettingsMenuLabels() {
+	for i := range m.menuBar.Menus {
+		for j := range m.menuBar.Menus[i].Items {
+			item := &m.menuBar.Menus[i].Items[j]
+			switch item.Action {
+			case "toggle_icons_only":
+				if m.dock.IconsOnly {
+					item.Label = "Dock: Icons Only [on]"
+				} else {
+					item.Label = "Dock: Icons Only [off]"
+				}
+			case "toggle_animations":
+				if m.animationsOn {
+					item.Label = "Animations [on]"
+				} else {
+					item.Label = "Animations [off]"
+				}
+			}
+		}
+	}
+}
+
 func (m Model) executeMenuAction(action string) (tea.Model, tea.Cmd) {
 	switch action {
 	case "new_terminal":
@@ -1290,6 +1319,13 @@ func (m Model) executeMenuAction(action string) (tea.Model, tea.Cmd) {
 		cfg := config.LoadUserConfig()
 		cfg.IconsOnly = m.dock.IconsOnly
 		config.SaveUserConfig(cfg)
+		m.updateSettingsMenuLabels()
+	case "toggle_animations":
+		m.animationsOn = !m.animationsOn
+		cfg := config.LoadUserConfig()
+		cfg.Animations = m.animationsOn
+		config.SaveUserConfig(cfg)
+		m.updateSettingsMenuLabels()
 	case "help_keys":
 		m.modal = m.helpOverlay()
 	case "about":
@@ -1307,7 +1343,8 @@ func (m Model) executeMenuAction(action string) (tea.Model, tea.Cmd) {
 		cmd := m.openTerminalWindowMaximized("htop", nil)
 		return m, cmd
 	case "launch_calc":
-		cmd := m.openTerminalWindowWith("python3", nil)
+		calcPath := findAppBinary("termdesk-calc")
+		cmd := m.openTerminalWindowWith(calcPath, nil)
 		return m, cmd
 	case "detach":
 		// Send OSC detach sequence — server detects this and disconnects client
@@ -1336,12 +1373,13 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 
 	// If confirm dialog is showing, check for button clicks
 	if m.confirmClose != nil {
-		title := m.confirmClose.Title
-		boxW := runeLen(title) + 6
-		if boxW < 28 {
-			boxW = 28
+		// Match lipgloss dialog dimensions: innerW + 2 (border), 5 rows (border+title+sep+buttons+border)
+		innerW := runeLen(m.confirmClose.Title) + 4
+		if innerW < 26 {
+			innerW = 26
 		}
-		boxH := 6
+		boxW := innerW + 2 // +2 for rounded border
+		boxH := 5
 		startX := (m.width - boxW) / 2
 		startY := (m.height - boxH) / 2
 		if startX < 0 {
@@ -1350,22 +1388,14 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		if startY < 0 {
 			startY = 0
 		}
-		yesLabel := " Yes "
-		noLabel := "  No "
-		gap := boxW - 2 - len(yesLabel) - len(noLabel)
-		if gap < 4 {
-			gap = 4
-		}
-		yesX := startX + 1 + (gap / 3)
-		noX := startX + boxW - 1 - len(noLabel) - (gap / 3)
-		btnY := startY + 4
+		btnY := startY + 3 // row 3 = buttons (0=border, 1=title, 2=sep, 3=buttons)
 
-		if mouse.Y == btnY {
-			if mouse.X >= yesX && mouse.X < yesX+len(yesLabel) {
+		if mouse.Y == btnY && mouse.X > startX && mouse.X < startX+boxW-1 {
+			midX := startX + boxW/2
+			if mouse.X < midX {
 				m.confirmClose.Selected = 0
 				return m.confirmAccept()
-			}
-			if mouse.X >= noX && mouse.X < noX+len(noLabel) {
+			} else {
 				m.confirmClose.Selected = 1
 				m.confirmClose = nil
 				return m, nil
@@ -2696,4 +2726,21 @@ func (m Model) View() tea.View {
 	m.cache.viewGen = m.cache.updateGen
 	m.cache.view = v
 	return v
+}
+
+// findAppBinary looks for a termdesk app binary by name.
+// Checks the directory of the current executable first, then falls back to PATH.
+func findAppBinary(name string) string {
+	// Check next to the main binary
+	if exe, err := os.Executable(); err == nil {
+		candidate := filepath.Join(filepath.Dir(exe), name)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	// Fall back to PATH
+	if p, err := exec.LookPath(name); err == nil {
+		return p
+	}
+	return name // let openTerminalWindowWith handle the error
 }

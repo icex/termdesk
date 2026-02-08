@@ -291,9 +291,9 @@ func TestRenderOpenMenu(t *testing.T) {
 	mb.OpenMenu(0)
 	rendered := mb.Render(80)
 
-	// Open menu should be bracketed
-	if !strings.Contains(rendered, "[File]") {
-		t.Errorf("open menu not bracketed: %q", rendered)
+	// Open menu label should be present (highlight applied at render time, no brackets)
+	if !strings.Contains(rendered, " File ") {
+		t.Errorf("open menu label not found: %q", rendered)
 	}
 }
 
@@ -348,15 +348,19 @@ func TestRenderDropdownHover(t *testing.T) {
 	mb.HoverIndex = 0
 
 	lines := mb.RenderDropdown()
-	// Hovered item should have > indicator
+	// Hovered item should be present (highlight applied via lipgloss, no > indicator)
+	if len(lines) < 2 {
+		t.Fatal("expected dropdown lines with items")
+	}
+	// First item (New Terminal) should appear in the dropdown
 	found := false
 	for _, line := range lines {
-		if strings.Contains(line, ">") {
+		if strings.Contains(line, "New Terminal") {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("expected hover indicator > in dropdown")
+		t.Error("expected hovered item label in dropdown")
 	}
 }
 

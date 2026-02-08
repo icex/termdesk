@@ -93,6 +93,8 @@ func resetTerminal(f *os.File) {
 	seq = append(seq, "\x1b[0m"...)      // reset all SGR attributes
 	seq = append(seq, "\x1b]110\x07"...) // reset default foreground (OSC 110)
 	seq = append(seq, "\x1b]111\x07"...) // reset default background (OSC 111)
+	seq = append(seq, "\x1b[2J"...)      // clear screen
+	seq = append(seq, "\x1b[H"...)       // move cursor to home
 	f.Write(seq)
 }
 

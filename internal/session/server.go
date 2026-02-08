@@ -227,22 +227,29 @@ func (s *Server) acceptLoop() {
 		s.client = conn
 		s.clientMu.Unlock()
 
-		// Send terminal mode preamble + screen content for instant reattach.
-		// The client's terminal starts fresh — we must re-enable alt screen,
-		// mouse mode, and colors before sending the cell content.
+		// Send terminal mode preamble for reattach.
+		// The client's terminal starts fresh — re-enable alt screen,
+		// mouse mode, and colors. A forced PTY resize follows to trigger
+		// SIGWINCH so BT redraws the full frame with correct dimensions.
 		var preamble []byte
 		preamble = append(preamble, "\x1b[?1049h"...)   // alt screen
 		preamble = append(preamble, "\x1b[?1002h"...)   // mouse cell motion
 		preamble = append(preamble, "\x1b[?1006h"...)   // SGR mouse encoding
 		preamble = append(preamble, "\x1b[?25l"...)     // hide cursor (BT manages it)
 		preamble = append(preamble, "\x1b[?2004h"...)   // bracketed paste
-		preamble = append(preamble, s.emu.Render()...)
 		s.writeMu.Lock()
 		err = WriteMsg(conn, MsgRedraw, preamble)
 		s.writeMu.Unlock()
 		if err != nil {
 			s.disconnectClient()
 			continue
+		}
+
+		// Force a PTY resize to current dimensions — triggers SIGWINCH
+		// so BT does a full redraw, producing a correct frame immediately.
+		ws, wsErr := pty.GetsizeFull(s.ptmx)
+		if wsErr == nil {
+			pty.Setsize(s.ptmx, ws)
 		}
 
 		go s.handleClient(conn)

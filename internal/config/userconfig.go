@@ -65,17 +65,19 @@ func DefaultKeyBindings() KeyBindings {
 
 // UserConfig holds persistent user settings.
 type UserConfig struct {
-	Theme     string `toml:"theme"`
-	IconsOnly bool   `toml:"icons_only"`
-	Keys      KeyBindings
+	Theme      string `toml:"theme"`
+	IconsOnly  bool   `toml:"icons_only"`
+	Animations bool   `toml:"animations"`
+	Keys       KeyBindings
 }
 
 // DefaultUserConfig returns the default user configuration.
 func DefaultUserConfig() UserConfig {
 	return UserConfig{
-		Theme:     "modern",
-		IconsOnly: false,
-		Keys:      DefaultKeyBindings(),
+		Theme:      "modern",
+		IconsOnly:  false,
+		Animations: true,
+		Keys:       DefaultKeyBindings(),
 	}
 }
 
@@ -144,6 +146,8 @@ func parseConfig(cfg *UserConfig, data string) {
 				cfg.Theme = val
 			case "icons_only":
 				cfg.IconsOnly = val == "true"
+			case "animations":
+				cfg.Animations = val == "true"
 			}
 		case "keybindings":
 			parseKeybinding(&cfg.Keys, key, val)
@@ -226,6 +230,11 @@ func SaveUserConfig(cfg UserConfig) error {
 		sb.WriteString("icons_only = true\n")
 	} else {
 		sb.WriteString("icons_only = false\n")
+	}
+	if cfg.Animations {
+		sb.WriteString("animations = true\n")
+	} else {
+		sb.WriteString("animations = false\n")
 	}
 
 	// Write keybindings section (only non-default values)

@@ -74,8 +74,9 @@ func TestRenderHover(t *testing.T) {
 	d.SetHover(1) // hover Terminal (index 1, after launcher)
 	rendered := d.Render(120)
 
-	if !strings.Contains(rendered, "[") {
-		t.Error("expected brackets around hovered item")
+	// Hovered item should still be present (accent bg applied at render time, no brackets)
+	if !strings.Contains(rendered, "Terminal") {
+		t.Error("expected hovered item label in render")
 	}
 }
 

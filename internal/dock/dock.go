@@ -167,12 +167,9 @@ func (d *Dock) RenderCells(width int) []DockCell {
 					cell.Special = true
 				}
 				// Determine if this cell is part of the icon
+				// Icon starts at localX=1 (after leading space)
 				localX := col - span.start
-				bracketOffset := 0
-				if span.index == d.HoverIndex {
-					bracketOffset = 1 // skip leading '['
-				}
-				if localX >= bracketOffset && localX < bracketOffset+iconWidths[span.index] {
+				if localX >= 1 && localX < 1+iconWidths[span.index] {
 					cell.IconColor = item.IconColor
 				}
 				break
@@ -190,16 +187,13 @@ func (d *Dock) renderItems() string {
 	for i, item := range d.Items {
 		var s string
 		if d.IconsOnly {
-			s = item.Icon
+			s = " " + item.Icon + " "
 		} else {
-			s = item.Icon + " " + item.Label
+			s = " " + item.Icon + " " + item.Label + " "
 		}
 		// Running indicator dot (macOS-like)
 		if d.IsRunning(i) {
 			s += "\u00b7" // middle dot ·
-		}
-		if i == d.HoverIndex {
-			s = "[" + s + "]"
 		}
 		parts = append(parts, s)
 	}
@@ -243,15 +237,14 @@ func (d *Dock) itemWidth(idx int) int {
 	item := d.Items[idx]
 	var w int
 	if d.IconsOnly {
-		w = utf8.RuneCountInString(item.Icon)
+		// " icon " = 1 + icon + 1
+		w = utf8.RuneCountInString(item.Icon) + 2
 	} else {
-		w = utf8.RuneCountInString(item.Icon) + 1 + utf8.RuneCountInString(item.Label)
+		// " icon label " = 1 + icon + 1 + label + 1
+		w = utf8.RuneCountInString(item.Icon) + 1 + utf8.RuneCountInString(item.Label) + 2
 	}
 	if d.IsRunning(idx) {
 		w++ // dot
-	}
-	if idx == d.HoverIndex {
-		w += 2 // brackets
 	}
 	return w
 }

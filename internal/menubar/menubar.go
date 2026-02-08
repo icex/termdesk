@@ -66,6 +66,7 @@ func New(width int, kb config.KeyBindings) *MenuBar {
 				{Label: "Snap Right", Shortcut: kb.SnapRight, Action: "snap_right"},
 				{Label: "─", Disabled: true},
 				{Label: "Dock: Icons Only", Action: "toggle_icons_only"},
+				{Label: "Animations", Action: "toggle_animations"},
 				{Label: "─", Disabled: true},
 				{Label: "Theme: Retro", Action: "theme_retro"},
 				{Label: "Theme: Modern", Action: "theme_modern"},
@@ -225,12 +226,8 @@ func (mb *MenuBar) Render(width int) string {
 	var sb strings.Builder
 
 	// Render menu labels
-	for i, m := range mb.Menus {
-		if i == mb.OpenIndex {
-			sb.WriteString("[" + m.Label + "]")
-		} else {
-			sb.WriteString(" " + m.Label + " ")
-		}
+	for _, m := range mb.Menus {
+		sb.WriteString(" " + m.Label + " ")
 	}
 
 	left := sb.String()
@@ -276,7 +273,7 @@ func (mb *MenuBar) RenderDropdown() []string {
 	var lines []string
 	lines = append(lines, "┌"+strings.Repeat("─", maxW-2)+"┐")
 
-	for i, item := range menu.Items {
+	for _, item := range menu.Items {
 		// Separator: render as connected horizontal line
 		if isSeparator(item) {
 			lines = append(lines, "├"+strings.Repeat("─", maxW-2)+"┤")
@@ -294,12 +291,6 @@ func (mb *MenuBar) RenderDropdown() []string {
 		}
 		for len([]rune(content)) < innerW {
 			content += " "
-		}
-
-		if i == mb.HoverIndex && !item.Disabled {
-			runes := []rune(content)
-			runes[0] = '>'
-			content = string(runes)
 		}
 
 		lines = append(lines, "│"+content+"│")
@@ -392,9 +383,6 @@ func (mb *MenuBar) RenderDropdownStyled(borderFg, bgColor, hoverFg, hoverBg, nor
 
 		isHover := i == mb.HoverIndex && !item.Disabled
 		label := " " + item.Label
-		if isHover {
-			label = ">" + item.Label
-		}
 
 		if item.Shortcut != "" {
 			gap := maxInnerW - len([]rune(label)) - len(item.Shortcut) - 1

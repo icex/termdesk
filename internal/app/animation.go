@@ -236,8 +236,9 @@ func (m *Model) dockPulseProgress(dockIdx int) float64 {
 }
 
 // startWindowAnimation creates a new spring-based animation for a window transition.
+// If animations are disabled, immediately finalizes the animation.
 func (m *Model) startWindowAnimation(windowID string, typ AnimationType, from, to geometry.Rect) {
-	m.animations = append(m.animations, Animation{
+	a := Animation{
 		Type:      typ,
 		WindowID:  windowID,
 		StartRect: from,
@@ -247,12 +248,19 @@ func (m *Model) startWindowAnimation(windowID string, typ AnimationType, from, t
 		W:         float64(from.Width),
 		H:         float64(from.Height),
 		Spring:    springForType(typ),
-	})
+	}
+	if !m.animationsOn {
+		a.Done = true
+		m.finalizeAnimation(&a)
+		return
+	}
+	m.animations = append(m.animations, a)
 }
 
 // startExposeAnimation creates a spring-based animation with the expose spring preset.
+// If animations are disabled, immediately finalizes the animation.
 func (m *Model) startExposeAnimation(windowID string, typ AnimationType, from, to geometry.Rect) {
-	m.animations = append(m.animations, Animation{
+	a := Animation{
 		Type:      typ,
 		WindowID:  windowID,
 		StartRect: from,
@@ -262,11 +270,20 @@ func (m *Model) startExposeAnimation(windowID string, typ AnimationType, from, t
 		W:         float64(from.Width),
 		H:         float64(from.Height),
 		Spring:    springExpose,
-	})
+	}
+	if !m.animationsOn {
+		a.Done = true
+		m.finalizeAnimation(&a)
+		return
+	}
+	m.animations = append(m.animations, a)
 }
 
 // startDockPulse starts a dock item pulse animation (time-based, not spring).
 func (m *Model) startDockPulse(dockIdx int) {
+	if !m.animationsOn {
+		return
+	}
 	m.animations = append(m.animations, Animation{
 		Type:      AnimDockPulse,
 		DockIndex: dockIdx,

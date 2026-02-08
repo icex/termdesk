@@ -858,6 +858,22 @@ func RenderMenuBar(buf *Buffer, mb *menubar.MenuBar, theme config.Theme, mode In
 		col++
 	}
 
+	// Highlight open menu label with accent background
+	// Include the leading space for symmetric padding
+	if mb.IsOpen() {
+		positions := mb.MenuXPositions()
+		pos := positions[mb.OpenIndex]
+		labelW := len([]rune(mb.Menus[mb.OpenIndex].Label)) + 2
+		hlStart := pos
+		if pos > 0 {
+			hlStart = pos - 1
+		}
+		for x := hlStart; x < hlStart+labelW && x < buf.Width; x++ {
+			buf.Cells[0][x].Bg = c.DockAccentBg
+			buf.Cells[0][x].Attrs = AttrBold
+		}
+	}
+
 	// Colorize right-side CPU/MEM indicators
 	for _, zone := range mb.RightZones(effectiveWidth) {
 		var zoneColor color.Color
@@ -1093,29 +1109,26 @@ func RenderConfirmDialog(buf *Buffer, dialog *ConfirmDialog, theme config.Theme)
 		Width(innerW)
 	sepStr := sepStyle.Render(strings.Repeat("─", innerW))
 
-	// Hint
-	hintStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#888888")).
-		Background(contentBg).
-		Width(innerW).
-		Align(lipgloss.Center)
-	hintStr := hintStyle.Render("Press Y or N")
-
-	// Buttons
+	// Buttons — fixed width so Yes and No are equal size
+	btnW := 8
 	activeBtnYes := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("#1E1E2E")).
 		Background(lipgloss.Color("#98C379")).
-		Padding(0, 2)
+		Width(btnW).
+		Align(lipgloss.Center)
 	activeBtnNo := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("#1E1E2E")).
 		Background(lipgloss.Color("#E06C75")).
-		Padding(0, 2)
+		Width(btnW).
+		Align(lipgloss.Center)
 	dimBtn := lipgloss.NewStyle().
+		Bold(true).
 		Foreground(fgColor).
 		Background(contentBg).
-		Padding(0, 2)
+		Width(btnW).
+		Align(lipgloss.Center)
 
 	var yesStr, noStr string
 	if dialog.Selected == 0 {
@@ -1133,7 +1146,7 @@ func RenderConfirmDialog(buf *Buffer, dialog *ConfirmDialog, theme config.Theme)
 	btnStr := btnRowStyle.Render(btnRow)
 
 	// Compose
-	inner := strings.Join([]string{titleStr, sepStr, hintStr, btnStr}, "\n")
+	inner := strings.Join([]string{titleStr, sepStr, btnStr}, "\n")
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -1404,9 +1417,10 @@ func RenderModal(buf *Buffer, modal *ModalOverlay, theme config.Theme) {
 	footerStr := footerStyle.Render(footerText)
 
 	// Compose inner content
+	spacer := lipgloss.NewStyle().Background(bgColor).Width(innerW).Render("")
 	parts := []string{titleStr, sepStr}
 	if tabBarStr != "" {
-		parts = append(parts, tabBarStr)
+		parts = append(parts, tabBarStr, spacer)
 	}
 	parts = append(parts, contentStr, footerStr)
 	inner := strings.Join(parts, "\n")

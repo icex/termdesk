@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-#  termdesk install script -- works on Linux and macOS
+#  termdesk install script -- Linux, macOS, and Android (Termux)
 # ---------------------------------------------------------------------------
 
 # -- colours ----------------------------------------------------------------
@@ -25,17 +25,43 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MIN_GO_MAJOR=1
 MIN_GO_MINOR=23
 GO_CMD=""
-OS=""
+OS=""       # linux, macos, termux
+PKG_MGR=""  # apt, brew, pkg, dnf, pacman
 
-# -- detect OS --------------------------------------------------------------
+# -- detect OS and package manager -----------------------------------------
 detect_os() {
     heading "Detecting operating system"
+
+    # Check for Termux first (Android)
+    if [[ -n "${TERMUX_VERSION:-}" ]] || [[ -d "/data/data/com.termux" ]]; then
+        OS="termux"
+        PKG_MGR="pkg"
+        ok "Detected Termux on Android ($(uname -m))"
+        return
+    fi
+
     case "$(uname -s)" in
         Linux*)  OS="linux";;
         Darwin*) OS="macos";;
         *)       err "Unsupported OS: $(uname -s)"; exit 1;;
     esac
-    ok "Detected ${OS} ($(uname -m))"
+
+    # Detect package manager
+    if [[ "${OS}" == "macos" ]]; then
+        if command -v brew &>/dev/null; then
+            PKG_MGR="brew"
+        fi
+    elif [[ "${OS}" == "linux" ]]; then
+        if command -v apt &>/dev/null; then
+            PKG_MGR="apt"
+        elif command -v dnf &>/dev/null; then
+            PKG_MGR="dnf"
+        elif command -v pacman &>/dev/null; then
+            PKG_MGR="pacman"
+        fi
+    fi
+
+    ok "Detected ${OS} ($(uname -m))${PKG_MGR:+, package manager: ${PKG_MGR}}"
 }
 
 # -- locate Go and verify version -------------------------------------------
@@ -49,20 +75,30 @@ check_go() {
         GO_CMD="${HOME}/.local/go/bin/go"
     elif [[ -x "/usr/local/go/bin/go" ]]; then
         GO_CMD="/usr/local/go/bin/go"
+    elif [[ -x "${HOME}/go/bin/go" ]]; then
+        GO_CMD="${HOME}/go/bin/go"
     fi
 
     if [[ -z "${GO_CMD}" ]]; then
         err "Go is not installed."
         echo ""
-        echo "  Install Go ${MIN_GO_MAJOR}.${MIN_GO_MINOR}+ from:"
-        echo "    https://go.dev/dl/"
+        echo "  Install Go ${MIN_GO_MAJOR}.${MIN_GO_MINOR}+ :"
         echo ""
-        echo "  Quick install (Linux):"
-        echo "    wget https://go.dev/dl/go1.23.6.linux-amd64.tar.gz"
-        echo "    sudo tar -C /usr/local -xzf go1.23.6.linux-amd64.tar.gz"
+        case "${OS}" in
+            termux)
+                echo "    pkg install golang";;
+            macos)
+                echo "    brew install go"
+                echo "    -- or download from https://go.dev/dl/";;
+            linux)
+                echo "    Download from https://go.dev/dl/"
+                echo ""
+                echo "    Quick install:"
+                echo "      wget https://go.dev/dl/go1.23.6.linux-amd64.tar.gz"
+                echo "      sudo tar -C /usr/local -xzf go1.23.6.linux-amd64.tar.gz"
+                echo "      export PATH=/usr/local/go/bin:\$PATH";;
+        esac
         echo ""
-        echo "  Quick install (macOS with Homebrew):"
-        echo "    brew install go"
         exit 1
     fi
 
@@ -89,7 +125,12 @@ check_nerd_font() {
 
     local found=false
 
-    if command -v fc-list &>/dev/null; then
+    if [[ "${OS}" == "termux" ]]; then
+        # Termux uses ~/.termux/font.ttf
+        if [[ -f "${HOME}/.termux/font.ttf" ]]; then
+            found=true
+        fi
+    elif command -v fc-list &>/dev/null; then
         if fc-list 2>/dev/null | grep -qi "nerd\|nf-"; then
             found=true
         fi
@@ -113,19 +154,104 @@ check_nerd_font() {
         echo "  Recommended: JetBrainsMono Nerd Font"
         echo "  Download:    https://www.nerdfonts.com/font-downloads"
         echo ""
-        if [[ "${OS}" == "macos" ]]; then
-            echo "  Quick install (Homebrew):"
-            echo "    brew install --cask font-jetbrains-mono-nerd-font"
-        else
-            echo "  Quick install (Linux):"
-            echo "    mkdir -p ~/.local/share/fonts"
-            echo "    cd ~/.local/share/fonts"
-            echo "    curl -fLO https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.tar.xz"
-            echo "    tar -xf JetBrainsMono.tar.xz"
-            echo "    fc-cache -fv"
-        fi
+        case "${OS}" in
+            termux)
+                echo "  Quick install (Termux):"
+                echo "    curl -fLo ~/.termux/font.ttf \\"
+                echo "      https://github.com/ryanoasis/nerd-fonts/raw/HEAD/patched-fonts/JetBrainsMono/Ligatures/Regular/JetBrainsMonoNerdFont-Regular.ttf"
+                echo "    termux-reload-settings";;
+            macos)
+                echo "  Quick install (Homebrew):"
+                echo "    brew install --cask font-jetbrains-mono-nerd-font";;
+            linux)
+                echo "  Quick install (Linux):"
+                echo "    mkdir -p ~/.local/share/fonts"
+                echo "    cd ~/.local/share/fonts"
+                echo "    curl -fLO https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.tar.xz"
+                echo "    tar -xf JetBrainsMono.tar.xz"
+                echo "    fc-cache -fv";;
+        esac
         echo ""
         info "Continuing with install..."
+    fi
+}
+
+# -- install recommended apps -----------------------------------------------
+install_apps() {
+    heading "Checking recommended apps"
+
+    # Apps used by termdesk dock/launcher/menubar
+    local apps=("btop" "nvim" "python3")
+    local missing=()
+
+    for app in "${apps[@]}"; do
+        local cmd="${app}"
+        # nvim binary is nvim
+        if command -v "${cmd}" &>/dev/null; then
+            ok "${app} found"
+        else
+            missing+=("${app}")
+            warn "${app} not found"
+        fi
+    done
+
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        ok "All recommended apps are installed"
+        return
+    fi
+
+    echo ""
+    info "Missing apps: ${missing[*]}"
+    echo ""
+
+    # Map app names to package names per platform
+    local pkgs=()
+    for app in "${missing[@]}"; do
+        case "${OS}:${app}" in
+            termux:nvim)    pkgs+=("neovim");;
+            termux:btop)    pkgs+=("btop");;
+            termux:python3) pkgs+=("python");;
+            macos:nvim)     pkgs+=("neovim");;
+            macos:btop)     pkgs+=("btop");;
+            macos:python3)  pkgs+=("python3");;
+            linux:nvim)     pkgs+=("neovim");;
+            linux:btop)     pkgs+=("btop");;
+            linux:python3)  pkgs+=("python3");;
+        esac
+    done
+
+    if [[ ${#pkgs[@]} -eq 0 ]]; then
+        return
+    fi
+
+    if [[ -z "${PKG_MGR}" ]]; then
+        warn "No package manager detected. Install manually: ${pkgs[*]}"
+        return
+    fi
+
+    echo "  Install missing apps with:"
+    echo ""
+    case "${PKG_MGR}" in
+        pkg)    echo "    pkg install ${pkgs[*]}";;
+        brew)   echo "    brew install ${pkgs[*]}";;
+        apt)    echo "    sudo apt install ${pkgs[*]}";;
+        dnf)    echo "    sudo dnf install ${pkgs[*]}";;
+        pacman) echo "    sudo pacman -S ${pkgs[*]}";;
+    esac
+    echo ""
+
+    # Auto-install on Termux (no sudo needed)
+    if [[ "${PKG_MGR}" == "pkg" ]]; then
+        read -rp "  Install now? [Y/n] " answer
+        answer="${answer:-y}"
+        if [[ "${answer}" =~ ^[Yy] ]]; then
+            pkg install -y "${pkgs[@]}"
+            ok "Apps installed"
+        else
+            info "Skipping app install"
+        fi
+    else
+        info "Install them after termdesk is set up (optional but recommended)"
     fi
 }
 
@@ -135,6 +261,9 @@ build() {
 
     cd "${SCRIPT_DIR}"
     mkdir -p bin
+
+    # Ensure GOPATH/bin is in PATH for go install dependencies
+    export PATH="${HOME}/go/bin:${HOME}/.local/go/bin:/usr/local/go/bin:${PATH}"
 
     info "Running: ${GO_CMD} build -o bin/termdesk ./cmd/termdesk"
     "${GO_CMD}" build -o bin/termdesk ./cmd/termdesk
@@ -153,16 +282,18 @@ install_binary() {
 
     local install_dir
 
-    if [[ "${OS}" == "linux" ]]; then
-        install_dir="${HOME}/.local/bin"
-    else
-        # macOS: prefer /usr/local/bin if writable, otherwise fall back
-        if [[ -w /usr/local/bin ]]; then
-            install_dir="/usr/local/bin"
-        else
-            install_dir="${HOME}/.local/bin"
-        fi
-    fi
+    case "${OS}" in
+        termux)
+            install_dir="${PREFIX}/bin";;
+        macos)
+            if [[ -w /usr/local/bin ]]; then
+                install_dir="/usr/local/bin"
+            else
+                install_dir="${HOME}/.local/bin"
+            fi;;
+        linux)
+            install_dir="${HOME}/.local/bin";;
+    esac
 
     mkdir -p "${install_dir}"
     cp "${SCRIPT_DIR}/bin/termdesk" "${install_dir}/termdesk"
@@ -179,8 +310,9 @@ install_binary() {
     fi
 }
 
-# -- create .desktop file (Linux only) --------------------------------------
+# -- create .desktop file (Linux desktop only) ------------------------------
 create_desktop_entry() {
+    # Skip on Termux and macOS
     if [[ "${OS}" != "linux" ]]; then
         return
     fi
@@ -223,14 +355,18 @@ print_success() {
     echo ""
     echo "  Usage:"
     echo "    termdesk          Launch termdesk"
-    echo "    termdesk --help   Show help"
     echo ""
 
-    if [[ "${OS}" == "linux" ]]; then
-        echo "  A .desktop entry was created so termdesk appears in your"
-        echo "  application launcher."
-        echo ""
-    fi
+    case "${OS}" in
+        linux)
+            echo "  A .desktop entry was created so termdesk appears in your"
+            echo "  application launcher."
+            echo "";;
+        termux)
+            echo "  Tip: For best experience in Termux, set your font to a"
+            echo "  Nerd Font and use a larger font size (Settings > Style)."
+            echo "";;
+    esac
 
     echo "  Make sure your terminal is using a Nerd Font for the best experience."
     echo ""
@@ -251,6 +387,7 @@ main() {
     detect_os
     check_go
     check_nerd_font
+    install_apps
     build
     install_binary
     create_desktop_entry

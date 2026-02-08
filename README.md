@@ -26,19 +26,73 @@ A retro terminal desktop environment inspired by Windows 1.0, DESQview, and Mac 
 
 - Go 1.23+
 - A terminal emulator with truecolor and mouse support
-- Nerd Font installed (for dock and UI icons)
+- [Nerd Font](https://www.nerdfonts.com/) (for dock and UI icons)
+- Recommended apps: `btop`, `nvim`, `python3` (used by dock/launcher)
 
 ## Install
 
+The install script handles everything: checks Go, installs recommended apps, builds, and installs the binary.
+
 ```bash
-./install.sh    # Builds and installs to ~/.local/bin/
+git clone https://github.com/icex/termdesk.git
+cd termdesk
+./install.sh
+```
+
+### Linux
+
+```bash
+# Install dependencies first (Debian/Ubuntu)
+sudo apt install golang neovim btop python3
+
+# Or on Arch
+sudo pacman -S go neovim btop python3
+
+# Then build and install
+./install.sh
+```
+
+### macOS
+
+```bash
+# Install with Homebrew
+brew install go neovim btop python3
+brew install --cask font-jetbrains-mono-nerd-font
+
+# Then build and install
+./install.sh
+```
+
+### Android (Termux)
+
+```bash
+# Install dependencies
+pkg install golang neovim btop python
+
+# Install a Nerd Font
+curl -fLo ~/.termux/font.ttf \
+  https://github.com/ryanoasis/nerd-fonts/raw/HEAD/patched-fonts/JetBrainsMono/Ligatures/Regular/JetBrainsMonoNerdFont-Regular.ttf
+termux-reload-settings
+
+# Clone and install
+git clone https://github.com/icex/termdesk.git
+cd termdesk
+./install.sh
+```
+
+### Manual Build (no install script)
+
+```bash
+go build -o bin/termdesk ./cmd/termdesk
+./bin/termdesk
 ```
 
 ## Quick Start
 
 ```bash
-make build
-./bin/termdesk
+termdesk            # if installed via install.sh
+# or
+make run            # build and run from source
 ```
 
 ## Configuration

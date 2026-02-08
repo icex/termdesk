@@ -181,7 +181,7 @@ install_apps() {
     heading "Checking recommended apps"
 
     # Apps used by termdesk dock/launcher/menubar
-    local apps=("btop" "nvim" "python3")
+    local apps=("htop" "mc" "nvim" "python3")
     local missing=()
 
     for app in "${apps[@]}"; do
@@ -209,13 +209,16 @@ install_apps() {
     for app in "${missing[@]}"; do
         case "${OS}:${app}" in
             termux:nvim)    pkgs+=("neovim");;
-            termux:btop)    pkgs+=("btop");;
+            termux:htop)    pkgs+=("htop");;
+            termux:mc)      pkgs+=("mc");;
             termux:python3) pkgs+=("python");;
             macos:nvim)     pkgs+=("neovim");;
-            macos:btop)     pkgs+=("btop");;
+            macos:htop)     pkgs+=("htop");;
+            macos:mc)       pkgs+=("mc");;
             macos:python3)  pkgs+=("python3");;
             linux:nvim)     pkgs+=("neovim");;
-            linux:btop)     pkgs+=("btop");;
+            linux:htop)     pkgs+=("htop");;
+            linux:mc)       pkgs+=("mc");;
             linux:python3)  pkgs+=("python3");;
         esac
     done
@@ -265,14 +268,20 @@ build() {
     # Ensure GOPATH/bin is in PATH for go install dependencies
     export PATH="${HOME}/go/bin:${HOME}/.local/go/bin:/usr/local/go/bin:${PATH}"
 
-    local build_flags=()
-    # Android/Termux requires PIE (Position Independent Executable)
+    local build_env=""
+    # Android/Termux requires CGO for proper ARM64 TLS alignment and PIE
     if [[ "${OS}" == "termux" ]]; then
-        build_flags+=("-buildmode=pie")
+        build_env="CGO_ENABLED=1"
+        info "Termux detected — building with CGO_ENABLED=1 for Android compatibility"
     fi
 
-    info "Running: ${GO_CMD} build ${build_flags[*]} -o bin/termdesk ./cmd/termdesk"
-    "${GO_CMD}" build "${build_flags[@]}" -o bin/termdesk ./cmd/termdesk
+    if [[ -n "${build_env}" ]]; then
+        info "Running: ${build_env} ${GO_CMD} build -o bin/termdesk ./cmd/termdesk"
+        env ${build_env} "${GO_CMD}" build -o bin/termdesk ./cmd/termdesk
+    else
+        info "Running: ${GO_CMD} build -o bin/termdesk ./cmd/termdesk"
+        "${GO_CMD}" build -o bin/termdesk ./cmd/termdesk
+    fi
 
     if [[ ! -x bin/termdesk ]]; then
         err "Build failed -- binary not found at bin/termdesk"

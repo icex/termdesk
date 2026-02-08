@@ -53,7 +53,7 @@ func New(width int) *MenuBar {
 				{Label: "\ue62b nvim", Action: "launch_nvim"},
 				{Label: "\uf07b Files", Action: "launch_files"},
 				{Label: "\uf1ec Calc", Action: "launch_calc"},
-				{Label: "\uf200 System Monitor", Action: "launch_btop"},
+				{Label: "\uf200 System Monitor", Action: "launch_htop"},
 			}},
 			{Label: "View", Items: []MenuItem{
 				{Label: "Tile All", Shortcut: "t", Action: "tile_all"},

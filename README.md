@@ -27,7 +27,7 @@ A retro terminal desktop environment inspired by Windows 1.0, DESQview, and Mac 
 - Go 1.23+
 - A terminal emulator with truecolor and mouse support
 - [Nerd Font](https://www.nerdfonts.com/) (for dock and UI icons)
-- Recommended apps: `btop`, `nvim`, `python3` (used by dock/launcher)
+- Recommended apps: `htop`, `mc`, `nvim`, `python3` (used by dock/launcher)
 
 ## Install
 
@@ -43,10 +43,10 @@ cd termdesk
 
 ```bash
 # Install dependencies first (Debian/Ubuntu)
-sudo apt install golang neovim btop python3
+sudo apt install golang neovim htop mc python3
 
 # Or on Arch
-sudo pacman -S go neovim btop python3
+sudo pacman -S go neovim htop mc python3
 
 # Then build and install
 ./install.sh
@@ -56,7 +56,7 @@ sudo pacman -S go neovim btop python3
 
 ```bash
 # Install with Homebrew
-brew install go neovim btop python3
+brew install go neovim htop mc python3
 brew install --cask font-jetbrains-mono-nerd-font
 
 # Then build and install
@@ -67,7 +67,7 @@ brew install --cask font-jetbrains-mono-nerd-font
 
 ```bash
 # Install dependencies
-pkg install golang neovim btop python
+pkg install golang neovim htop mc python
 
 # Install a Nerd Font
 curl -fLo ~/.termux/font.ttf \
@@ -87,12 +87,12 @@ cd termdesk
 go build -o bin/termdesk ./cmd/termdesk
 ./bin/termdesk
 
-# Android (Termux) — requires PIE build mode
-go build -buildmode=pie -o bin/termdesk ./cmd/termdesk
+# Android (Termux) — requires CGO for proper TLS alignment
+CGO_ENABLED=1 go build -o bin/termdesk ./cmd/termdesk
 ./bin/termdesk
 ```
 
-> **Termux note**: `go run` does not work on Android — it produces an `unexpected e_type: 2` error because Android requires PIE (Position Independent Executable) binaries. Always use `go build -buildmode=pie` then run the binary.
+> **Termux note**: `go run` does not work on Android — it produces an `unexpected e_type: 2` error because Android requires PIE binaries. Use `CGO_ENABLED=1 go build` (the system C linker produces correct TLS alignment for ARM64 Bionic).
 
 ## Quick Start
 

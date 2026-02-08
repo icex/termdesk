@@ -779,10 +779,10 @@ func (m Model) executeMenuAction(action string) (tea.Model, tea.Cmd) {
 		cmd := m.openTerminalWindowMaximized("nvim", nil)
 		return m, cmd
 	case "launch_files":
-		cmd := m.openTerminalWindowMaximized("spf", nil)
+		cmd := m.openTerminalWindowMaximized("mc", nil)
 		return m, cmd
-	case "launch_btop":
-		cmd := m.openTerminalWindowMaximized("btop", nil)
+	case "launch_htop":
+		cmd := m.openTerminalWindowMaximized("htop", nil)
 		return m, cmd
 	case "launch_calc":
 		cmd := m.openTerminalWindowWith("python3", nil)
@@ -906,7 +906,7 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 			// Launch space-hungry apps maximized
 			var cmd tea.Cmd
 			switch item.Command {
-			case "nvim", "spf", "btop", "htop", "mc":
+			case "nvim", "mc", "htop", "btop", "spf", "ranger", "lf", "yazi":
 				cmd = m.openTerminalWindowMaximized(item.Command, item.Args)
 			default:
 				cmd = m.openTerminalWindowWith(item.Command, item.Args)
@@ -1654,7 +1654,7 @@ func (m *Model) resizeAllTerminals() {
 func (m Model) handleMenuBarRightClick(zoneType string) (tea.Model, tea.Cmd) {
 	switch zoneType {
 	case "cpu", "mem":
-		cmd := m.openTerminalWindowMaximized("btop", nil)
+		cmd := m.openTerminalWindowMaximized("htop", nil)
 		return m, cmd
 	case "clock":
 		m.modal = &ModalOverlay{
@@ -1855,14 +1855,12 @@ func minimizedDockLabel(w *window.Window) (icon, label string) {
 		return "\uf120", "T" //  terminal
 	case cmd == "nvim" || cmd == "vim" || cmd == "vi":
 		return "\ue62b", "V" //  vim
-	case cmd == "spf" || cmd == "ranger" || cmd == "lf" || cmd == "yazi":
+	case cmd == "mc" || cmd == "spf" || cmd == "ranger" || cmd == "lf" || cmd == "yazi":
 		return "\uf07b", "F" //  files
-	case cmd == "btop" || cmd == "htop" || cmd == "top":
-		return "\uf200", "B" //  monitor
+	case cmd == "htop" || cmd == "btop" || cmd == "top":
+		return "\uf200", "M" //  monitor
 	case cmd == "python3" || cmd == "python" || cmd == "bc":
 		return "\uf1ec", "C" //  calc
-	case cmd == "mc":
-		return "\uf07b", "MC" //  commander
 	default:
 		// First letter of command, uppercased
 		if len(cmd) > 0 {

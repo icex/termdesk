@@ -206,7 +206,7 @@ func (l *Launcher) scanPath() {
 		icon string
 	}{
 		{"nvim", ""},
-		{"spf", ""},
+		{"spf", "\uf07b"},
 		{"claude", "󱜙"},
 		{"tetrigo", ""},
 		{"mc", ""},
@@ -243,7 +243,7 @@ func defaultApps() []AppEntry {
 	return []AppEntry{
 		{Name: "Terminal", Icon: "", Command: shell},
 		{Name: "nvim", Icon: "", Command: "nvim"},
-		{Name: "Files (spf)", Icon: "", Command: "spf"},
+		{Name: "Files (mc)", Icon: "\uf07b", Command: "mc"},
 		{Name: "Calculator", Icon: "", Command: "python3"},
 	}
 }

@@ -43,7 +43,7 @@ func New(width int) *Dock {
 			{Icon: "\uf135", IconColor: "#56B6C2", Label: "Launch", Special: "launcher"},   // cyan
 			{Icon: "\uf120", IconColor: "#98C379", Label: "Terminal", Command: "$SHELL"},    // green
 			{Icon: "\ue62b", IconColor: "#61AFEF", Label: "nvim", Command: "nvim"},          // blue
-			{Icon: "\uf07b", IconColor: "#E5C07B", Label: "Files", Command: "spf"},          // yellow
+			{Icon: "\uf07b", IconColor: "#E5C07B", Label: "Files", Command: "mc"},           // yellow
 			{Icon: "\uf1ec", IconColor: "#D19A66", Label: "Calc", Command: "python3"},       // orange
 			{Icon: "\uf26c", IconColor: "#C678DD", Label: "Expose\u0301", Special: "expose"}, // purple
 		},

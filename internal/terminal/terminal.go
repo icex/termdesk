@@ -11,10 +11,11 @@ import (
 
 // Terminal combines a PTY session with a VT emulator.
 type Terminal struct {
-	pty    *PtySession
-	emu    *vt.SafeEmulator
-	closed bool
-	mu     sync.Mutex
+	pty     *PtySession
+	emu     *vt.SafeEmulator
+	closed  bool
+	mu      sync.Mutex
+	writeCh chan []byte // buffered write channel for raw PTY input
 }
 
 // New creates a terminal running the given command.
@@ -27,9 +28,18 @@ func New(command string, args []string, cols, rows int) (*Terminal, error) {
 	emu := vt.NewSafeEmulator(cols, rows)
 
 	t := &Terminal{
-		pty: p,
-		emu: emu,
+		pty:     p,
+		emu:     emu,
+		writeCh: make(chan []byte, 256),
 	}
+
+	// Spawn writer goroutine — drains writeCh and writes to PTY.
+	// This keeps WriteInput non-blocking.
+	go t.writeLoop()
+
+	// Spawn input forwarder — reads encoded input from the emulator's pipe
+	// (filled by SendKey/SendMouse) and writes to PTY.
+	go t.inputForwardLoop()
 
 	return t, nil
 }
@@ -88,20 +98,130 @@ func (t *Terminal) ReadOnce() (int, error) {
 }
 
 // WriteInput sends raw bytes to the PTY (keyboard input).
+// Non-blocking — writes are buffered and processed by the writer goroutine.
 func (t *Terminal) WriteInput(data []byte) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	if !t.closed {
+	closed := t.closed
+	t.mu.Unlock()
+	if closed {
+		return
+	}
+	// Copy data to avoid races — caller may reuse the slice.
+	buf := make([]byte, len(data))
+	copy(buf, data)
+	select {
+	case t.writeCh <- buf:
+	default:
+		// Channel full — drop input to avoid blocking the UI.
+	}
+}
+
+// writeLoop drains the write channel and sends to the PTY.
+func (t *Terminal) writeLoop() {
+	for data := range t.writeCh {
+		t.mu.Lock()
+		closed := t.closed
+		t.mu.Unlock()
+		if closed {
+			return
+		}
 		t.pty.Write(data)
 	}
 }
 
-// SendKey converts a key event to bytes and sends to the PTY.
-func (t *Terminal) SendKey(code rune, mod uv.KeyMod, text string) {
-	data := encodeKey(code, mod, text)
-	if len(data) > 0 {
-		t.WriteInput(data)
+// inputForwardLoop reads encoded input from the emulator's internal pipe
+// (populated by SendKey/SendMouse/SendText) and writes it to the PTY.
+// The emulator handles mode-dependent encoding:
+// - Application Cursor Keys mode (DECCKM) for arrow keys in nvim
+// - Mouse mode tracking (only forwards mouse events when app has enabled mouse)
+// - Application Keypad mode for numeric keypad
+func (t *Terminal) inputForwardLoop() {
+	buf := make([]byte, 4096)
+	for {
+		n, err := t.emu.Read(buf)
+		if n > 0 {
+			t.mu.Lock()
+			closed := t.closed
+			t.mu.Unlock()
+			if closed {
+				return
+			}
+			t.pty.Write(buf[:n])
+		}
+		if err != nil {
+			return
+		}
 	}
+}
+
+// SendKey sends a key event through the emulator's input pipeline.
+// The emulator handles mode-dependent encoding (Application Cursor Keys, etc.)
+// which is critical for apps like nvim.
+func (t *Terminal) SendKey(code rune, mod uv.KeyMod, text string) {
+	t.mu.Lock()
+	closed := t.closed
+	t.mu.Unlock()
+	if closed {
+		return
+	}
+	t.emu.SendKey(uv.KeyPressEvent(uv.Key{Code: code, Mod: mod, Text: text}))
+}
+
+// SendMouse sends a mouse click event through the emulator's input pipeline.
+// The emulator only forwards mouse events when the terminal app has enabled
+// mouse mode — this prevents SGR sequences from appearing as "weird text".
+// col, row: 0-indexed coordinates relative to terminal content area.
+func (t *Terminal) SendMouse(button uv.MouseButton, col, row int, release bool) {
+	t.mu.Lock()
+	closed := t.closed
+	t.mu.Unlock()
+	if closed {
+		return
+	}
+	if release {
+		t.emu.SendMouse(uv.MouseReleaseEvent(uv.Mouse{
+			X:      col,
+			Y:      row,
+			Button: button,
+		}))
+	} else {
+		t.emu.SendMouse(uv.MouseClickEvent(uv.Mouse{
+			X:      col,
+			Y:      row,
+			Button: button,
+		}))
+	}
+}
+
+// SendMouseMotion sends a mouse motion event through the emulator's input pipeline.
+// col, row: 0-indexed coordinates.
+func (t *Terminal) SendMouseMotion(button uv.MouseButton, col, row int) {
+	t.mu.Lock()
+	closed := t.closed
+	t.mu.Unlock()
+	if closed {
+		return
+	}
+	t.emu.SendMouse(uv.MouseMotionEvent(uv.Mouse{
+		X:      col,
+		Y:      row,
+		Button: button,
+	}))
+}
+
+// SendMouseWheel sends a mouse wheel event through the emulator's input pipeline.
+func (t *Terminal) SendMouseWheel(button uv.MouseButton, col, row int) {
+	t.mu.Lock()
+	closed := t.closed
+	t.mu.Unlock()
+	if closed {
+		return
+	}
+	t.emu.SendMouse(uv.MouseWheelEvent(uv.Mouse{
+		X:      col,
+		Y:      row,
+		Button: button,
+	}))
 }
 
 // Render returns the terminal screen as an ANSI-encoded string.
@@ -142,6 +262,7 @@ func (t *Terminal) Close() error {
 		return nil
 	}
 	t.closed = true
+	close(t.writeCh)
 	return t.pty.Close()
 }
 

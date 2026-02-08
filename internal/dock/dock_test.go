@@ -3,6 +3,7 @@ package dock
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestNew(t *testing.T) {
@@ -28,8 +29,8 @@ func TestSetWidth(t *testing.T) {
 
 func TestItemCount(t *testing.T) {
 	d := New(120)
-	if d.ItemCount() != 4 {
-		t.Errorf("ItemCount = %d, want 4", d.ItemCount())
+	if d.ItemCount() != 6 {
+		t.Errorf("ItemCount = %d, want 6", d.ItemCount())
 	}
 }
 
@@ -70,7 +71,7 @@ func TestRender(t *testing.T) {
 
 func TestRenderHover(t *testing.T) {
 	d := New(120)
-	d.SetHover(0)
+	d.SetHover(1) // hover Terminal (index 1, after launcher)
 	rendered := d.Render(120)
 
 	if !strings.Contains(rendered, "[") {
@@ -120,14 +121,55 @@ func TestItemWidth(t *testing.T) {
 	}
 }
 
+func TestSpecialItems(t *testing.T) {
+	d := New(120)
+	// First item should be launcher
+	if d.Items[0].Special != "launcher" {
+		t.Errorf("first item special = %q, want launcher", d.Items[0].Special)
+	}
+	// Last item should be expose
+	last := d.Items[len(d.Items)-1]
+	if last.Special != "expose" {
+		t.Errorf("last item special = %q, want expose", last.Special)
+	}
+}
+
+func TestRenderCells(t *testing.T) {
+	d := New(120)
+	cells := d.RenderCells(120)
+	if len(cells) != 120 {
+		t.Errorf("RenderCells len = %d, want 120", len(cells))
+	}
+	// No cells should be accented without hover
+	for _, c := range cells {
+		if c.Accent {
+			t.Error("expected no accent cells without hover")
+			break
+		}
+	}
+	// With hover, some cells should be accented
+	d.SetHover(1)
+	cells = d.RenderCells(120)
+	hasAccent := false
+	for _, c := range cells {
+		if c.Accent {
+			hasAccent = true
+			break
+		}
+	}
+	if !hasAccent {
+		t.Error("expected accent cells with hover")
+	}
+}
+
 func TestRuneCount(t *testing.T) {
-	if runeCount("hello") != 5 {
-		t.Error("runeCount(hello) != 5")
+	if utf8.RuneCountInString("hello") != 5 {
+		t.Error("RuneCountInString(hello) != 5")
 	}
-	if runeCount("") != 0 {
-		t.Error("runeCount('') != 0")
+	if utf8.RuneCountInString("") != 0 {
+		t.Error("RuneCountInString('') != 0")
 	}
-	if runeCount("日本語") != 3 {
-		t.Error("runeCount(日本語) != 3")
+	if utf8.RuneCountInString("日本語") != 3 {
+		t.Error("RuneCountInString(日本語) != 3")
 	}
 }

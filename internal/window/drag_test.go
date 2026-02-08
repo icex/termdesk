@@ -18,7 +18,8 @@ func TestHitTest(t *testing.T) {
 		{"outside", geometry.Point{0, 0}, HitNone},
 		{"title bar", geometry.Point{10, 3}, HitTitleBar},
 		{"close button", geometry.Point{33, 3}, HitCloseButton},
-		{"max button", geometry.Point{30, 3}, HitMaxButton},
+		{"min button", geometry.Point{30, 3}, HitMinButton},
+		{"max button", geometry.Point{27, 3}, HitMaxButton},
 		{"content", geometry.Point{15, 10}, HitContent},
 		{"left border", geometry.Point{5, 10}, HitBorderW},
 		{"right border", geometry.Point{34, 10}, HitBorderE},
@@ -41,7 +42,8 @@ func TestHitTestNonResizable(t *testing.T) {
 	w.Resizable = false
 
 	// Area where max button would be should return title bar for non-resizable
-	got := HitTest(w, geometry.Point{24, 0}, 3, 3)
+	// (non-resizable windows have no max/snap buttons, only min and close)
+	got := HitTest(w, geometry.Point{20, 0}, 3, 3)
 	if got != HitTitleBar {
 		t.Errorf("expected HitTitleBar for non-resizable window, got %v", got)
 	}

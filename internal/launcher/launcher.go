@@ -244,6 +244,6 @@ func defaultApps() []AppEntry {
 		{Name: "Terminal", Icon: "", Command: shell},
 		{Name: "nvim", Icon: "", Command: "nvim"},
 		{Name: "Files (spf)", Icon: "", Command: "spf"},
-		{Name: "Calculator", Icon: "", Command: "calc"},
+		{Name: "Calculator", Icon: "", Command: "python3"},
 	}
 }

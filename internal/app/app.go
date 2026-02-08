@@ -2,19 +2,31 @@ package app
 
 import (
 	"fmt"
+	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/icex/termdesk/internal/config"
 	"github.com/icex/termdesk/internal/dock"
 	"github.com/icex/termdesk/internal/launcher"
 	"github.com/icex/termdesk/internal/menubar"
+	uv "github.com/charmbracelet/ultraviolet"
+
 	"github.com/icex/termdesk/internal/terminal"
 	"github.com/icex/termdesk/internal/window"
 	"github.com/icex/termdesk/pkg/geometry"
 
+	"github.com/mattn/go-runewidth"
 	tea "charm.land/bubbletea/v2"
 )
 
 const version = "0.1.0"
+
+// programRef holds a shared reference to the tea.Program.
+// Using a pointer so copies of Model (value receivers) share the same ref.
+type programRef struct {
+	p *tea.Program
+}
 
 // Model is the root model for the termdesk application.
 type Model struct {
@@ -28,23 +40,106 @@ type Model struct {
 	terminals map[string]*terminal.Terminal
 	menuBar   *menubar.MenuBar
 	dock      *dock.Dock
-	launcher  *launcher.Launcher
+	launcher     *launcher.Launcher
+	progRef      *programRef // shared program reference for goroutine messaging
+	exposeMode   bool        // exposé overview mode
+	inputMode    InputMode   // current input mode (Normal/Terminal/Copy)
+	dockFocused  bool        // true when dock has keyboard focus in Normal mode
+	confirmClose *ConfirmDialog
+	cpuPct       float64
+	memUsedGB    float64
+	animations   []Animation     // active animations
+	modal        *ModalOverlay   // help, about, or other modal
+}
+
+// ConfirmDialog represents a confirmation dialog overlay.
+type ConfirmDialog struct {
+	WindowID string // window to close, or "" for quit
+	Title    string
+	IsQuit   bool // true = quit application, false = close window
+	Selected int  // 0 = Yes, 1 = No
+}
+
+// ModalOverlay represents a modal text overlay (help, about, etc.)
+type ModalOverlay struct {
+	Title    string
+	Lines    []string
+	ScrollY  int
+}
+
+// InputMode represents the current interaction mode.
+type InputMode int
+
+const (
+	// ModeNormal is window management mode — single-letter WM keys work.
+	ModeNormal InputMode = iota
+	// ModeTerminal passes all input to the focused terminal.
+	ModeTerminal
+	// ModeCopy enables vim-style scrollback navigation and selection.
+	ModeCopy
+)
+
+// String returns the display name for the input mode.
+func (m InputMode) String() string {
+	switch m {
+	case ModeTerminal:
+		return "TERMINAL"
+	case ModeCopy:
+		return "COPY"
+	default:
+		return "NORMAL"
+	}
+}
+
+// cycleInputMode cycles through Normal → Terminal → Copy → Normal.
+func (m *Model) cycleInputMode() {
+	switch m.inputMode {
+	case ModeNormal:
+		m.inputMode = ModeTerminal
+	case ModeTerminal:
+		m.inputMode = ModeCopy
+	case ModeCopy:
+		m.inputMode = ModeNormal
+	}
+}
+
+// SystemStatsMsg carries updated system statistics.
+type SystemStatsMsg struct {
+	CPU   float64
+	MemGB float64
 }
 
 // New creates a new root Model.
 func New() Model {
 	return Model{
 		wm:        window.NewManager(80, 24),
-		theme:     config.RetroTheme(),
+		theme:     config.ModernTheme(),
 		terminals: make(map[string]*terminal.Terminal),
 		menuBar:   menubar.New(80),
 		dock:      dock.New(80),
 		launcher:  launcher.New(),
+		progRef:   &programRef{},
 	}
 }
 
+// SetProgram sets the tea.Program reference for background goroutine messaging.
+// Must be called before Run(). The reference is shared across Model copies
+// (Bubble Tea uses value receivers, so Model gets copied).
+func (m *Model) SetProgram(p *tea.Program) {
+	m.progRef.p = p
+}
+
 func (m Model) Init() tea.Cmd {
-	return nil
+	return m.tickSystemStats()
+}
+
+func (m Model) tickSystemStats() tea.Cmd {
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+		return SystemStatsMsg{
+			CPU:   menubar.ReadCPUPercent(),
+			MemGB: menubar.ReadMemoryGB(),
+		}
+	})
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -69,14 +164,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouseMotion(tea.Mouse(msg))
 
 	case tea.MouseReleaseMsg:
-		return m.handleMouseRelease()
+		return m.handleMouseRelease(tea.Mouse(msg))
+
+	case tea.MouseWheelMsg:
+		return m.handleMouseWheel(tea.Mouse(msg))
 
 	case PtyOutputMsg:
-		// PTY produced output — schedule another read
-		return m, m.readPtyOnce(msg.WindowID)
+		// PTY produced output — just re-render (goroutine handles reads)
+		// Mark unfocused windows as having notifications
+		if fw := m.wm.FocusedWindow(); fw == nil || fw.ID != msg.WindowID {
+			if w := m.wm.WindowByID(msg.WindowID); w != nil {
+				w.HasNotification = true
+			}
+		}
+		return m, nil
+
+	case SystemStatsMsg:
+		m.cpuPct = msg.CPU
+		m.memUsedGB = msg.MemGB
+		m.menuBar.CPUPct = msg.CPU
+		m.menuBar.MemGB = msg.MemGB
+		return m, m.tickSystemStats()
+
+	case AnimationTickMsg:
+		if m.updateAnimations(msg.Time) {
+			return m, tickAnimation()
+		}
+		return m, nil
 
 	case PtyClosedMsg:
-		// PTY exited — close the window
+		// PTY exited — animate close, then remove
+		if w := m.wm.WindowByID(msg.WindowID); w != nil && !m.isAnimatingClose(msg.WindowID) {
+			m.closeTerminal(msg.WindowID)
+			centerX := w.Rect.X + w.Rect.Width/2
+			centerY := w.Rect.Y + w.Rect.Height/2
+			m.startWindowAnimation(msg.WindowID, AnimClose, w.Rect,
+				geometry.Rect{X: centerX, Y: centerY, Width: 1, Height: 1})
+			return m, tickAnimation()
+		}
 		m.closeTerminal(msg.WindowID)
 		m.wm.RemoveWindow(msg.WindowID)
 		return m, nil
@@ -87,74 +212,126 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+	// Normalize single uppercase letters to lowercase so hotkeys work with caps lock.
+	if len(key) == 1 && key[0] >= 'A' && key[0] <= 'Z' {
+		key = strings.ToLower(key)
+	}
 
-	// If launcher is open, handle launcher keys first
+	// ── Layer 1: UI overlays always take precedence ──
+
+	if m.modal != nil {
+		switch key {
+		case "esc", "escape", "enter", "q":
+			m.modal = nil
+		case "up", "k":
+			if m.modal.ScrollY > 0 {
+				m.modal.ScrollY--
+			}
+		case "down", "j":
+			m.modal.ScrollY++
+		}
+		return m, nil
+	}
+
+	if m.confirmClose != nil {
+		switch key {
+		case "y":
+			m.confirmClose.Selected = 0 // select Yes
+			return m.confirmAccept()
+		case "n", "esc", "escape":
+			m.confirmClose = nil
+			return m, nil
+		case "enter":
+			return m.confirmAccept()
+		case "left", "right", "tab", "shift+tab", "h", "l":
+			// Toggle selected button
+			if m.confirmClose.Selected == 0 {
+				m.confirmClose.Selected = 1
+			} else {
+				m.confirmClose.Selected = 0
+			}
+		}
+		return m, nil
+	}
+
+	if m.exposeMode {
+		switch key {
+		case "esc", "escape":
+			m.exitExpose()
+			m.inputMode = ModeNormal
+			return m, tickAnimation()
+		case "tab", "right", "down", "j", "l":
+			m.cycleExposeWindow(1)
+			return m, tickAnimation()
+		case "shift+tab", "left", "up", "k", "h":
+			m.cycleExposeWindow(-1)
+			return m, tickAnimation()
+		case "enter":
+			m.exitExpose()
+			m.inputMode = ModeNormal
+			return m, tickAnimation()
+		case "1", "2", "3", "4", "5", "6", "7", "8":
+			idx := int(key[0] - '1') // 0-based
+			m.selectExposeByIndex(idx)
+			m.exitExpose()
+			m.inputMode = ModeNormal
+			return m, tickAnimation()
+		}
+		return m, nil
+	}
+
 	if m.launcher.Visible {
 		return m.handleLauncherKey(msg, key)
 	}
 
-	// If menu is open, handle menu navigation first
 	if m.menuBar.IsOpen() {
 		return m.handleMenuKey(key)
 	}
 
-	// Global keybindings (always handled regardless of focused window)
+	// ── Layer 2: Global hotkeys (work in any mode) ──
+
 	switch key {
-	case "ctrl+c", "ctrl+q":
-		m.closeAllTerminals()
-		return m, tea.Quit
-	case "ctrl+space":
-		m.launcher.Toggle()
+	case "ctrl+q":
+		m.confirmClose = &ConfirmDialog{Title: "Quit termdesk?", IsQuit: true}
+		return m, nil
+	case "f1":
+		m.modal = m.helpOverlay()
 		return m, nil
 	case "f10":
 		m.menuBar.OpenMenu(0)
 		return m, nil
-	case "ctrl+n":
-		cmd := m.openTerminalWindow()
-		return m, cmd
-	case "alt+tab":
-		m.wm.CycleForward()
-		return m, nil
-	case "alt+shift+tab":
-		m.wm.CycleBackward()
-		return m, nil
-	case "ctrl+w":
-		if fw := m.wm.FocusedWindow(); fw != nil {
-			m.closeTerminal(fw.ID)
-			m.wm.RemoveWindow(fw.ID)
+	case "f9":
+		if m.exposeMode {
+			m.exitExpose()
+		} else {
+			m.enterExpose()
 		}
-		return m, nil
-	case "ctrl+left":
-		if fw := m.wm.FocusedWindow(); fw != nil {
-			window.SnapLeft(fw, m.wm.WorkArea())
-			m.resizeTerminalForWindow(fw)
-		}
-		return m, nil
-	case "ctrl+right":
-		if fw := m.wm.FocusedWindow(); fw != nil {
-			window.SnapRight(fw, m.wm.WorkArea())
-			m.resizeTerminalForWindow(fw)
-		}
-		return m, nil
-	case "ctrl+up":
-		if fw := m.wm.FocusedWindow(); fw != nil {
-			window.Maximize(fw, m.wm.WorkArea())
-			m.resizeTerminalForWindow(fw)
-		}
-		return m, nil
-	case "ctrl+down":
-		if fw := m.wm.FocusedWindow(); fw != nil {
-			window.Restore(fw)
-			m.resizeTerminalForWindow(fw)
-		}
-		return m, nil
-	case "ctrl+t":
-		window.TileAll(m.wm.Windows(), m.wm.WorkArea())
-		m.resizeAllTerminals()
+		return m, tickAnimation()
+	}
+
+	// ── Layer 3: Mode-specific dispatch ──
+
+	switch m.inputMode {
+	case ModeTerminal:
+		return m.handleTerminalModeKey(msg, key)
+	case ModeCopy:
+		return m.handleCopyModeKey(msg, key)
+	default:
+		return m.handleNormalModeKey(msg, key)
+	}
+}
+
+// handleTerminalModeKey handles keys when in Terminal mode.
+// All keys are forwarded to the focused terminal except mode-switch keys.
+func (m Model) handleTerminalModeKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
+	// Mode switch: Esc, Ctrl+Esc, or F2 → Normal mode
+	switch key {
+	case "esc", "escape", "ctrl+escape", "f2":
+		m.inputMode = ModeNormal
 		return m, nil
 	}
 
-	// Forward keys to the focused terminal
+	// Forward everything else to the focused terminal
 	if fw := m.wm.FocusedWindow(); fw != nil {
 		if term, ok := m.terminals[fw.ID]; ok {
 			k := tea.Key(msg)
@@ -163,20 +340,265 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// If no window is focused, allow q to quit
-	if m.wm.FocusedWindow() == nil && key == "q" {
-		return m, tea.Quit
+	// No terminal focused — fall through to Normal mode behavior
+	m.inputMode = ModeNormal
+	return m.handleNormalModeKey(msg, key)
+}
+
+// handleNormalModeKey handles keys when in Normal (window management) mode.
+// Single-letter keys do WM operations without needing Ctrl.
+func (m Model) handleNormalModeKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
+	// ── Dock navigation sub-mode ──
+	if m.dockFocused {
+		return m.handleDockNav(key)
 	}
 
+	switch key {
+	// Enter Terminal mode
+	case "i", "enter":
+		if fw := m.wm.FocusedWindow(); fw != nil {
+			if _, ok := m.terminals[fw.ID]; ok {
+				m.inputMode = ModeTerminal
+				return m, nil
+			}
+		}
+		return m, nil
+
+	// Window cycling
+	case "tab", "ctrl+]":
+		m.wm.CycleForward()
+		return m, nil
+	case "shift+tab", "ctrl+[":
+		m.wm.CycleBackward()
+		return m, nil
+
+	// Focus dock
+	case "d":
+		m.dockFocused = true
+		if m.dock.HoverIndex < 0 {
+			m.dock.SetHover(0)
+		}
+		return m, nil
+
+	// Quit
+	case "q", "ctrl+c":
+		m.confirmClose = &ConfirmDialog{Title: "Quit termdesk?", IsQuit: true}
+		return m, nil
+
+	// New terminal
+	case "n", "ctrl+n":
+		m.inputMode = ModeNormal
+		cmd := m.openTerminalWindow()
+		return m, cmd
+
+	// Close window
+	case "w", "ctrl+w":
+		if fw := m.wm.FocusedWindow(); fw != nil {
+			m.confirmClose = &ConfirmDialog{
+				WindowID: fw.ID,
+				Title:    fmt.Sprintf("Close \"%s\"?", fw.Title),
+			}
+		}
+		return m, nil
+
+	// Minimize
+	case "m":
+		if fw := m.wm.FocusedWindow(); fw != nil {
+			m.minimizeWindow(fw)
+		}
+		return m, tickAnimation()
+
+	// Launcher
+	case "space", "ctrl+space", "ctrl+/":
+		m.launcher.Toggle()
+		return m, nil
+
+	// Snap left/right
+	case "left", "h":
+		if fw := m.wm.FocusedWindow(); fw != nil {
+			from := fw.Rect
+			window.SnapLeft(fw, m.wm.WorkArea())
+			m.startWindowAnimation(fw.ID, AnimSnap, from, fw.Rect)
+			m.resizeTerminalForWindow(fw)
+		}
+		return m, tickAnimation()
+	case "right", "l":
+		if fw := m.wm.FocusedWindow(); fw != nil {
+			from := fw.Rect
+			window.SnapRight(fw, m.wm.WorkArea())
+			m.startWindowAnimation(fw.ID, AnimSnap, from, fw.Rect)
+			m.resizeTerminalForWindow(fw)
+		}
+		return m, tickAnimation()
+
+	// Maximize / restore
+	case "up", "k":
+		if fw := m.wm.FocusedWindow(); fw != nil {
+			from := fw.Rect
+			window.Maximize(fw, m.wm.WorkArea())
+			m.startWindowAnimation(fw.ID, AnimMaximize, from, fw.Rect)
+			m.resizeTerminalForWindow(fw)
+		}
+		return m, tickAnimation()
+	case "down", "j":
+		if fw := m.wm.FocusedWindow(); fw != nil {
+			from := fw.Rect
+			window.Restore(fw)
+			m.startWindowAnimation(fw.ID, AnimRestore, from, fw.Rect)
+			m.resizeTerminalForWindow(fw)
+		}
+		return m, tickAnimation()
+
+	// Tile all
+	case "t":
+		m.animateTileAll()
+		return m, tickAnimation()
+
+	// Exposé
+	case "x":
+		m.enterExpose()
+		return m, tickAnimation()
+
+	// Focus window by number (1-9)
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		idx := int(key[0]-'0') - 1
+		windows := m.wm.Windows()
+		if idx < len(windows) {
+			m.wm.FocusWindow(windows[idx].ID)
+		}
+		return m, nil
+
+	// Menu shortcuts
+	case "f":
+		m.menuBar.OpenMenu(0) // File
+		return m, nil
+	case "a":
+		m.menuBar.OpenMenu(1) // Apps
+		return m, nil
+	case "v":
+		m.menuBar.OpenMenu(2) // View
+		return m, nil
+
+	// Esc in normal mode — exit dock focus or no-op
+	case "esc", "escape":
+		m.dockFocused = false
+		m.dock.SetHover(-1)
+		return m, nil
+	}
+
+	return m, nil
+}
+
+// handleDockNav handles keyboard navigation of the dock bar.
+func (m Model) handleDockNav(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "left", "h":
+		idx := m.dock.HoverIndex - 1
+		if idx < 0 {
+			idx = m.dock.ItemCount() - 1
+		}
+		m.dock.SetHover(idx)
+		return m, nil
+	case "right", "l":
+		idx := m.dock.HoverIndex + 1
+		if idx >= m.dock.ItemCount() {
+			idx = 0
+		}
+		m.dock.SetHover(idx)
+		return m, nil
+	case "enter":
+		return m.activateDockItem(m.dock.HoverIndex)
+	case "esc", "escape", "d", "up", "k":
+		m.dockFocused = false
+		m.dock.SetHover(-1)
+		return m, nil
+	}
+	return m, nil
+}
+
+// activateDockItem launches or restores the dock item at the given index.
+func (m Model) activateDockItem(idx int) (tea.Model, tea.Cmd) {
+	if idx < 0 || idx >= len(m.dock.Items) {
+		return m, nil
+	}
+	item := m.dock.Items[idx]
+	m.dockFocused = false
+	m.dock.SetHover(-1)
+
+	switch item.Special {
+	case "launcher":
+		m.launcher.Toggle()
+		return m, nil
+	case "expose":
+		m.enterExpose()
+		return m, tickAnimation()
+	case "minimized":
+		// Restore the minimized window
+		if w := m.wm.WindowByID(item.WindowID); w != nil {
+			m.restoreMinimizedWindow(w)
+			return m, tickAnimation()
+		}
+		return m, nil
+	default:
+		// Launch the app
+		if item.Command != "" {
+			m.inputMode = ModeNormal
+			cmd := m.openTerminalWindowWith(item.Command, item.Args)
+			return m, cmd
+		}
+	}
+	return m, nil
+}
+
+// handleCopyModeKey handles keys when in Copy mode (vim-style scrollback).
+// confirmAccept processes the confirm dialog based on the selected button.
+func (m Model) confirmAccept() (tea.Model, tea.Cmd) {
+	if m.confirmClose == nil {
+		return m, nil
+	}
+	if m.confirmClose.Selected == 1 { // No
+		m.confirmClose = nil
+		return m, nil
+	}
+	// Yes
+	if m.confirmClose.IsQuit {
+		m.closeAllTerminals()
+		return m, tea.Quit
+	}
+	wid := m.confirmClose.WindowID
+	m.confirmClose = nil
+	if w := m.wm.WindowByID(wid); w != nil {
+		centerX := w.Rect.X + w.Rect.Width/2
+		centerY := w.Rect.Y + w.Rect.Height/2
+		m.startWindowAnimation(wid, AnimClose, w.Rect,
+			geometry.Rect{X: centerX, Y: centerY, Width: 1, Height: 1})
+		return m, tickAnimation()
+	}
+	m.closeTerminal(wid)
+	m.wm.RemoveWindow(wid)
+	return m, nil
+}
+
+func (m Model) handleCopyModeKey(_ tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc", "escape", "q":
+		m.inputMode = ModeNormal
+		return m, nil
+	case "i":
+		m.inputMode = ModeTerminal
+		return m, nil
+	}
+	// TODO: vim-style navigation, selection, yank
 	return m, nil
 }
 
 func (m Model) handleLauncherKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "ctrl+c", "ctrl+q":
-		m.closeAllTerminals()
-		return m, tea.Quit
-	case "esc", "escape", "ctrl+space":
+		m.launcher.Hide()
+		m.confirmClose = &ConfirmDialog{Title: "Quit termdesk?", IsQuit: true}
+		return m, nil
+	case "esc", "escape", "ctrl+space", "ctrl+/":
 		m.launcher.Hide()
 		return m, nil
 	case "up":
@@ -229,8 +651,8 @@ func (m Model) executeMenuAction(action string) (tea.Model, tea.Cmd) {
 		cmd := m.openTerminalWindow()
 		return m, cmd
 	case "quit":
-		m.closeAllTerminals()
-		return m, tea.Quit
+		m.confirmClose = &ConfirmDialog{Title: "Quit termdesk?", IsQuit: true}
+		return m, nil
 	case "tile_all":
 		window.TileAll(m.wm.Windows(), m.wm.WorkArea())
 		m.resizeAllTerminals()
@@ -244,12 +666,101 @@ func (m Model) executeMenuAction(action string) (tea.Model, tea.Cmd) {
 			window.SnapRight(fw, m.wm.WorkArea())
 			m.resizeTerminalForWindow(fw)
 		}
+	case "minimize":
+		if fw := m.wm.FocusedWindow(); fw != nil {
+			m.minimizeWindow(fw)
+			return m, tickAnimation()
+		}
+	case "toggle_icons_only":
+		m.dock.IconsOnly = !m.dock.IconsOnly
+	case "help_keys":
+		m.modal = m.helpOverlay()
+	case "about":
+		m.modal = m.aboutOverlay()
+	case "launch_terminal":
+		cmd := m.openTerminalWindow()
+		return m, cmd
+	case "launch_nvim":
+		cmd := m.openTerminalWindowMaximized("nvim", nil)
+		return m, cmd
+	case "launch_files":
+		cmd := m.openTerminalWindowMaximized("spf", nil)
+		return m, cmd
+	case "launch_btop":
+		cmd := m.openTerminalWindowMaximized("btop", nil)
+		return m, cmd
+	case "launch_calc":
+		cmd := m.openTerminalWindowWith("python3", nil)
+		return m, cmd
+	case "theme_retro", "theme_modern", "theme_tokyonight", "theme_catppuccin":
+		name := action[6:] // strip "theme_" prefix
+		m.theme = config.GetTheme(name)
 	}
 	return m, nil
 }
 
 func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	p := geometry.Point{X: mouse.X, Y: mouse.Y}
+
+	// If modal is showing, any click dismisses it
+	if m.modal != nil {
+		m.modal = nil
+		return m, nil
+	}
+
+	// If confirm dialog is showing, check for button clicks
+	if m.confirmClose != nil {
+		title := m.confirmClose.Title
+		boxW := runeLen(title) + 6
+		if boxW < 28 {
+			boxW = 28
+		}
+		boxH := 6
+		startX := (m.width - boxW) / 2
+		startY := (m.height - boxH) / 2
+		if startX < 0 {
+			startX = 0
+		}
+		if startY < 0 {
+			startY = 0
+		}
+		yesLabel := " Yes "
+		noLabel := "  No "
+		gap := boxW - 2 - len(yesLabel) - len(noLabel)
+		if gap < 4 {
+			gap = 4
+		}
+		yesX := startX + 1 + (gap / 3)
+		noX := startX + boxW - 1 - len(noLabel) - (gap / 3)
+		btnY := startY + 4
+
+		if mouse.Y == btnY {
+			if mouse.X >= yesX && mouse.X < yesX+len(yesLabel) {
+				m.confirmClose.Selected = 0
+				return m.confirmAccept()
+			}
+			if mouse.X >= noX && mouse.X < noX+len(noLabel) {
+				m.confirmClose.Selected = 1
+				m.confirmClose = nil
+				return m, nil
+			}
+		}
+		// Click outside the dialog dismisses it
+		if mouse.X < startX || mouse.X >= startX+boxW || mouse.Y < startY || mouse.Y >= startY+boxH {
+			m.confirmClose = nil
+		}
+		return m, nil
+	}
+
+	// If exposé mode, click selects a window
+	if m.exposeMode {
+		if mouse.Y != m.height-1 && mouse.Y != 0 { // not dock or menubar
+			m.selectExposeWindow(mouse.X, mouse.Y)
+			m.exitExpose()
+			m.inputMode = ModeNormal
+		}
+		return m, tickAnimation()
+	}
 
 	// If launcher is open, dismiss on click outside
 	if m.launcher.Visible {
@@ -262,18 +773,66 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		idx := m.dock.ItemAtX(mouse.X)
 		if idx >= 0 && idx < len(m.dock.Items) {
 			item := m.dock.Items[idx]
+			// Handle special dock items
+			switch item.Special {
+			case "launcher":
+				m.launcher.Toggle()
+				return m, nil
+			case "expose":
+				if m.exposeMode {
+					m.exitExpose()
+				} else {
+					m.enterExpose()
+				}
+				return m, tickAnimation()
+			case "minimized":
+				if w := m.wm.WindowByID(item.WindowID); w != nil {
+					m.restoreMinimizedWindow(w)
+					return m, tickAnimation()
+				}
+				return m, nil
+			}
+			// Regular app launch — with dock pulse animation
+			m.inputMode = ModeNormal
+			m.startDockPulse(idx)
 			if item.Command == "$SHELL" || item.Command == "" {
 				cmd := m.openTerminalWindow()
-				return m, cmd
+				return m, tea.Batch(cmd, tickAnimation())
 			}
-			cmd := m.openTerminalWindowWith(item.Command, item.Args)
-			return m, cmd
+			// Launch space-hungry apps maximized
+			var cmd tea.Cmd
+			switch item.Command {
+			case "nvim", "spf", "btop", "htop", "mc":
+				cmd = m.openTerminalWindowMaximized(item.Command, item.Args)
+			default:
+				cmd = m.openTerminalWindowWith(item.Command, item.Args)
+			}
+			return m, tea.Batch(cmd, tickAnimation())
 		}
 		return m, nil
 	}
 
 	// Check if click is on menu bar (y=0)
 	if mouse.Y == 0 {
+		// Check right-side zones first (clock, CPU, MEM, mode badge)
+		// Use effective width (same as rendering — leave room for mode badge)
+		mLabel := modeBadge(m.inputMode)
+		mLabelW := runewidth.StringWidth(mLabel)
+		effW := m.width - mLabelW
+		if effW < 1 {
+			effW = 1
+		}
+		// Check if click is on the mode badge (far right)
+		modeX := m.width - mLabelW
+		if mouse.X >= modeX && mouse.X < m.width {
+			m.cycleInputMode()
+			return m, nil
+		}
+		for _, zone := range m.menuBar.RightZones(effW) {
+			if mouse.X >= zone.Start && mouse.X < zone.End {
+				return m.handleMenuBarRightClick(zone.Type)
+			}
+		}
 		idx := m.menuBar.MenuAtX(mouse.X)
 		if idx >= 0 {
 			if m.menuBar.IsOpen() && m.menuBar.OpenIndex == idx {
@@ -328,14 +887,50 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 
 	switch zone {
 	case window.HitCloseButton:
-		m.closeTerminal(w.ID)
-		m.wm.RemoveWindow(w.ID)
+		m.confirmClose = &ConfirmDialog{
+			WindowID: w.ID,
+			Title:    fmt.Sprintf("Close \"%s\"?", w.Title),
+		}
 		return m, nil
 
+	case window.HitMinButton:
+		m.minimizeWindow(w)
+		return m, tickAnimation()
+
 	case window.HitMaxButton:
+		from := w.Rect
 		window.ToggleMaximize(w, m.wm.WorkArea())
+		m.startWindowAnimation(w.ID, AnimMaximize, from, w.Rect)
 		m.resizeTerminalForWindow(w)
-		return m, nil
+		return m, tickAnimation()
+
+	case window.HitSnapLeftButton:
+		from := w.Rect
+		window.SnapLeft(w, m.wm.WorkArea())
+		m.startWindowAnimation(w.ID, AnimSnap, from, w.Rect)
+		m.resizeTerminalForWindow(w)
+		return m, tickAnimation()
+
+	case window.HitSnapRightButton:
+		from := w.Rect
+		window.SnapRight(w, m.wm.WorkArea())
+		m.startWindowAnimation(w.ID, AnimSnap, from, w.Rect)
+		m.resizeTerminalForWindow(w)
+		return m, tickAnimation()
+
+	case window.HitContent:
+		// Clicking on terminal content enters Terminal mode
+		if _, ok := m.terminals[w.ID]; ok {
+			m.inputMode = ModeTerminal
+		}
+		// Forward mouse click to terminal via emulator (respects mouse mode)
+		if term, ok := m.terminals[w.ID]; ok {
+			cr := w.ContentRect()
+			localX := mouse.X - cr.X // 0-indexed
+			localY := mouse.Y - cr.Y
+			btn := teaToUvButton(mouse.Button)
+			term.SendMouse(btn, localX, localY, false)
+		}
 
 	case window.HitTitleBar, window.HitBorderN, window.HitBorderS, window.HitBorderE,
 		window.HitBorderW, window.HitBorderNE, window.HitBorderNW,
@@ -364,6 +959,19 @@ func (m Model) handleMouseMotion(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	}
 
 	if !m.drag.Active {
+		// Forward motion to focused terminal if over content area
+		if fw := m.wm.FocusedWindow(); fw != nil {
+			cr := fw.ContentRect()
+			p := geometry.Point{X: mouse.X, Y: mouse.Y}
+			if cr.Contains(p) {
+				if term, ok := m.terminals[fw.ID]; ok {
+					localX := mouse.X - cr.X // 0-indexed
+					localY := mouse.Y - cr.Y
+					btn := teaToUvButton(mouse.Button)
+					term.SendMouseMotion(btn, localX, localY)
+				}
+			}
+		}
 		return m, nil
 	}
 
@@ -386,20 +994,57 @@ func (m Model) handleMouseMotion(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handleMouseRelease() (tea.Model, tea.Cmd) {
+func (m Model) handleMouseRelease(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	if m.drag.Active {
 		// Resize terminal after drag completes
 		w := m.wm.WindowByID(m.drag.WindowID)
 		if w != nil {
 			m.resizeTerminalForWindow(w)
 		}
+		m.drag = window.DragState{}
+		return m, nil
 	}
 	m.drag = window.DragState{}
+
+	// Forward release to focused terminal
+	p := geometry.Point{X: mouse.X, Y: mouse.Y}
+	if fw := m.wm.FocusedWindow(); fw != nil {
+		cr := fw.ContentRect()
+		if cr.Contains(p) {
+			if term, ok := m.terminals[fw.ID]; ok {
+				localX := mouse.X - cr.X // 0-indexed
+				localY := mouse.Y - cr.Y
+				btn := teaToUvButton(mouse.Button)
+				term.SendMouse(btn, localX, localY, true)
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m Model) handleMouseWheel(mouse tea.Mouse) (tea.Model, tea.Cmd) {
+	p := geometry.Point{X: mouse.X, Y: mouse.Y}
+	w := m.wm.WindowAt(p)
+	if w == nil {
+		return m, nil
+	}
+	cr := w.ContentRect()
+	if cr.Contains(p) {
+		if term, ok := m.terminals[w.ID]; ok {
+			localX := mouse.X - cr.X // 0-indexed
+			localY := mouse.Y - cr.Y
+			btn := teaToUvButton(mouse.Button)
+			// SGR mouse encoding — works if terminal app enabled mouse mode.
+			// Apps without mouse mode won't receive the event (emulator drops silently).
+			term.SendMouseWheel(btn, localX, localY)
+		}
+	}
 	return m, nil
 }
 
 // launchApp launches a command in a new terminal window.
 func (m Model) launchApp(command string, args []string) (tea.Model, tea.Cmd) {
+	m.inputMode = ModeNormal
 	cmd := m.openTerminalWindowWith(command, args)
 	return m, cmd
 }
@@ -409,9 +1054,14 @@ func (m *Model) openTerminalWindow() tea.Cmd {
 	return m.openTerminalWindowWith("", nil)
 }
 
+const maxWindows = 8
+
 // openTerminalWindowWith creates a new window running the specified command.
 // If command is empty, it launches the default shell.
 func (m *Model) openTerminalWindowWith(command string, args []string) tea.Cmd {
+	if len(m.wm.Windows()) >= maxWindows {
+		return nil
+	}
 	m.nextWID++
 	id := fmt.Sprintf("win-%d", m.nextWID)
 	title := fmt.Sprintf("Terminal %d", m.nextWID)
@@ -432,12 +1082,23 @@ func (m *Model) openTerminalWindowWith(command string, args []string) tea.Cmd {
 		h = window.MinWindowHeight
 	}
 
-	win := window.NewWindow(id, title, geometry.Rect{X: x, Y: y, Width: w, Height: h}, nil)
+	finalRect := geometry.Rect{X: x, Y: y, Width: w, Height: h}
+	win := window.NewWindow(id, title, finalRect, nil)
+	win.Command = command
+	win.TitleBarHeight = m.theme.TitleBarRows()
 	m.wm.AddWindow(win)
 
-	// Content area is window minus borders (1 cell each side, 1 row top, 1 row bottom)
-	contentW := w - 2
-	contentH := h - 2
+	// Animate window opening — grow from center
+	centerX := x + w/2
+	centerY := y + h/2
+	m.startWindowAnimation(id, AnimOpen,
+		geometry.Rect{X: centerX, Y: centerY, Width: 1, Height: 1},
+		finalRect)
+
+	// Use window's actual content rect (accounts for title bar height)
+	cr := win.ContentRect()
+	contentW := cr.Width
+	contentH := cr.Height
 	if contentW < 1 {
 		contentW = 1
 	}
@@ -459,8 +1120,41 @@ func (m *Model) openTerminalWindowWith(command string, args []string) tea.Cmd {
 
 	m.terminals[id] = term
 
-	// Kick off the first PTY read — this starts the event-driven read chain
-	return m.readPtyOnce(id)
+	// Spawn background reader goroutine — reads PTY output and sends messages
+	// via program.Send(). Never blocks the main Update loop.
+	if m.progRef != nil && m.progRef.p != nil {
+		p := m.progRef.p
+		go func() {
+			defer func() {
+				recover() // prevent panics from crashing the entire app
+				p.Send(PtyClosedMsg{WindowID: id})
+			}()
+			for {
+				n, err := term.ReadOnce()
+				if err != nil {
+					p.Send(PtyClosedMsg{WindowID: id, Err: err})
+					return
+				}
+				if n > 0 {
+					p.Send(PtyOutputMsg{WindowID: id})
+				}
+			}
+		}()
+	}
+	return tickAnimation()
+}
+
+// openTerminalWindowMaximized creates a new maximized terminal window.
+func (m *Model) openTerminalWindowMaximized(command string, args []string) tea.Cmd {
+	cmd := m.openTerminalWindowWith(command, args)
+	// Find the window we just created and maximize it
+	if fw := m.wm.FocusedWindow(); fw != nil {
+		from := fw.Rect
+		window.Maximize(fw, m.wm.WorkArea())
+		m.startWindowAnimation(fw.ID, AnimMaximize, from, fw.Rect)
+		m.resizeTerminalForWindow(fw)
+	}
+	return cmd
 }
 
 // openDemoWindow creates a demo window without a terminal (for testing).
@@ -486,20 +1180,307 @@ func (m *Model) openDemoWindow() {
 	m.wm.AddWindow(win)
 }
 
-// readPtyOnce returns a Cmd that reads one chunk from the PTY.
-// On success, it returns PtyOutputMsg to trigger a re-render and schedule the next read.
-// On EOF/error, it returns PtyClosedMsg to close the window.
-func (m *Model) readPtyOnce(windowID string) tea.Cmd {
-	term, ok := m.terminals[windowID]
-	if !ok {
-		return nil
-	}
-	return func() tea.Msg {
-		_, err := term.ReadOnce()
-		if err != nil {
-			return PtyClosedMsg{WindowID: windowID, Err: err}
+// enterExpose transitions into exposé mode with animations.
+func (m *Model) enterExpose() {
+	m.exposeMode = true
+	wa := m.wm.WorkArea()
+	var visible []*window.Window
+	var focusedWin *window.Window
+	for _, w := range m.wm.Windows() {
+		if w.Visible && !w.Minimized {
+			visible = append(visible, w)
+			if w.Focused {
+				focusedWin = w
+			}
 		}
-		return PtyOutputMsg{WindowID: windowID}
+	}
+	if len(visible) == 0 {
+		return
+	}
+	if focusedWin == nil {
+		focusedWin = visible[0]
+	}
+
+	// Animate focused window to center
+	focTarget := exposeTargetRect(focusedWin, wa, true)
+	m.startExposeAnimation(focusedWin.ID, AnimExpose, focusedWin.Rect, focTarget)
+
+	// Animate unfocused windows to bottom strip
+	bgTargets := exposeBgTargets(visible, focusedWin.ID, wa)
+	for id, target := range bgTargets {
+		if w := m.wm.WindowByID(id); w != nil {
+			m.startExposeAnimation(id, AnimExpose, w.Rect, target)
+		}
+	}
+}
+
+// exitExpose transitions out of exposé mode with animations.
+func (m *Model) exitExpose() {
+	m.exposeMode = false
+	wa := m.wm.WorkArea()
+	var visible []*window.Window
+	var focusedWin *window.Window
+	for _, w := range m.wm.Windows() {
+		if w.Visible && !w.Minimized {
+			visible = append(visible, w)
+			if w.Focused {
+				focusedWin = w
+			}
+		}
+	}
+	if len(visible) == 0 {
+		return
+	}
+	if focusedWin == nil {
+		focusedWin = visible[0]
+	}
+
+	// Animate focused window from center back to its real position
+	focFrom := exposeTargetRect(focusedWin, wa, true)
+	m.startExposeAnimation(focusedWin.ID, AnimExposeExit, focFrom, focusedWin.Rect)
+
+	// Animate unfocused windows from bottom strip back to their positions
+	bgTargets := exposeBgTargets(visible, focusedWin.ID, wa)
+	for id, from := range bgTargets {
+		if w := m.wm.WindowByID(id); w != nil {
+			m.startExposeAnimation(id, AnimExposeExit, from, w.Rect)
+		}
+	}
+}
+
+// cycleExposeWindow animates switching focus in exposé mode.
+// direction: +1 = forward, -1 = backward.
+func (m *Model) cycleExposeWindow(direction int) {
+	wa := m.wm.WorkArea()
+	var visible []*window.Window
+	var oldFocused *window.Window
+	for _, w := range m.wm.Windows() {
+		if w.Visible && !w.Minimized {
+			visible = append(visible, w)
+			if w.Focused {
+				oldFocused = w
+			}
+		}
+	}
+	if len(visible) < 2 || oldFocused == nil {
+		if direction > 0 {
+			m.wm.CycleForward()
+		} else {
+			m.wm.CycleBackward()
+		}
+		return
+	}
+
+	// Compute old focused window's center target rect (where it currently is)
+	oldCenterRect := exposeTargetRect(oldFocused, wa, true)
+
+	// Cycle focus
+	if direction > 0 {
+		m.wm.CycleForward()
+	} else {
+		m.wm.CycleBackward()
+	}
+
+	var newFocused *window.Window
+	for _, w := range visible {
+		if w.Focused {
+			newFocused = w
+			break
+		}
+	}
+	if newFocused == nil || newFocused.ID == oldFocused.ID {
+		return
+	}
+
+	// Where the new focused window currently is in the bg strip
+	bgTargets := exposeBgTargets(visible, newFocused.ID, wa)
+	newBgRect, ok := bgTargets[oldFocused.ID]
+	if !ok {
+		// Old focused goes to some position in the strip — recalculate with new focus
+		bgTargets = exposeBgTargets(visible, newFocused.ID, wa)
+		newBgRect = bgTargets[oldFocused.ID]
+	}
+
+	// Where the new focused window was in the old bg strip
+	oldBgTargets := exposeBgTargets(visible, oldFocused.ID, wa)
+	newOldBgRect := oldBgTargets[newFocused.ID]
+
+	// Animate: old focused → shrink to its new bg position
+	m.startExposeAnimation(oldFocused.ID, AnimExpose, oldCenterRect, newBgRect)
+
+	// Animate: new focused → grow from its old bg position to center
+	newCenterRect := exposeTargetRect(newFocused, wa, true)
+	m.startExposeAnimation(newFocused.ID, AnimExpose, newOldBgRect, newCenterRect)
+
+	// Animate all other windows repositioning in the bg strip
+	for _, w := range visible {
+		if w.ID == oldFocused.ID || w.ID == newFocused.ID {
+			continue
+		}
+		oldPos := oldBgTargets[w.ID]
+		newPos := bgTargets[w.ID]
+		if oldPos != newPos {
+			m.startExposeAnimation(w.ID, AnimExpose, oldPos, newPos)
+		}
+	}
+}
+
+// exposeTargetRect calculates the exposé display rect for a window.
+// If focused=true, returns a large centered rect; otherwise a small thumbnail.
+func exposeTargetRect(w *window.Window, wa geometry.Rect, focused bool) geometry.Rect {
+	if focused {
+		// Centered, up to 70% of work area
+		focW := w.Rect.Width * 7 / 10
+		focH := w.Rect.Height * 7 / 10
+		maxW := wa.Width * 7 / 10
+		maxH := wa.Height * 7 / 10
+		if focW > maxW {
+			focW = maxW
+		}
+		if focH > maxH {
+			focH = maxH
+		}
+		if focW < 16 {
+			focW = 16
+		}
+		if focH < 8 {
+			focH = 8
+		}
+		return geometry.Rect{
+			X:      wa.X + (wa.Width-focW)/2,
+			Y:      wa.Y + (wa.Height-focH)/3,
+			Width:  focW,
+			Height: focH,
+		}
+	}
+	// Small thumbnail — used for bg targets calculation
+	return geometry.Rect{X: wa.X, Y: wa.Y, Width: 16, Height: 6}
+}
+
+// exposeBgTargets returns a map of window ID → target rect for unfocused windows
+// arranged along the bottom of the work area.
+func exposeBgTargets(visible []*window.Window, focusedID string, wa geometry.Rect) map[string]geometry.Rect {
+	targets := make(map[string]geometry.Rect)
+	bgCount := 0
+	for _, w := range visible {
+		if w.ID != focusedID {
+			bgCount++
+		}
+	}
+	if bgCount == 0 {
+		return targets
+	}
+
+	thumbW := 16
+	thumbH := 6
+	totalThumbW := bgCount * (thumbW + 1)
+	if totalThumbW > wa.Width-2 {
+		thumbW = (wa.Width - 2 - bgCount) / bgCount
+		if thumbW < 8 {
+			thumbW = 8
+		}
+	}
+	startX := wa.X + (wa.Width-bgCount*(thumbW+1)+1)/2
+	thumbY := wa.Y + wa.Height - thumbH - 1
+
+	idx := 0
+	for _, w := range visible {
+		if w.ID == focusedID {
+			continue
+		}
+		x := startX + idx*(thumbW+1)
+		targets[w.ID] = geometry.Rect{X: x, Y: thumbY, Width: thumbW, Height: thumbH}
+		idx++
+	}
+	return targets
+}
+
+// selectExposeWindow finds which mini-window was clicked in exposé mode and focuses it.
+// Layout matches RenderExpose: focused window centered, others in bottom strip.
+func (m *Model) selectExposeWindow(mouseX, mouseY int) {
+	wa := m.wm.WorkArea()
+	var visible []*window.Window
+	var focusedWin *window.Window
+	for _, w := range m.wm.Windows() {
+		if w.Visible && !w.Minimized {
+			visible = append(visible, w)
+			if w.Focused {
+				focusedWin = w
+			}
+		}
+	}
+	if len(visible) == 0 {
+		return
+	}
+	if focusedWin == nil {
+		focusedWin = visible[0]
+	}
+
+	// Check focused center window first
+	focW := focusedWin.Rect.Width * 7 / 10
+	focH := focusedWin.Rect.Height * 7 / 10
+	maxW := wa.Width * 7 / 10
+	maxH := wa.Height * 7 / 10
+	if focW > maxW {
+		focW = maxW
+	}
+	if focH > maxH {
+		focH = maxH
+	}
+	if focW < 16 {
+		focW = 16
+	}
+	if focH < 8 {
+		focH = 8
+	}
+	focX := wa.X + (wa.Width-focW)/2
+	focY := wa.Y + (wa.Height-focH)/3
+	if mouseX >= focX && mouseX < focX+focW && mouseY >= focY && mouseY < focY+focH {
+		// Already focused — just exit exposé
+		return
+	}
+
+	// Check background thumbnails (bottom strip)
+	bgCount := len(visible) - 1
+	if bgCount <= 0 {
+		return
+	}
+	thumbW := 16
+	thumbH := 6
+	totalThumbW := bgCount * (thumbW + 1)
+	if totalThumbW > wa.Width-2 {
+		thumbW = (wa.Width - 2 - bgCount) / bgCount
+		if thumbW < 8 {
+			thumbW = 8
+		}
+	}
+	startX := wa.X + (wa.Width-bgCount*(thumbW+1)+1)/2
+	thumbY := wa.Y + wa.Height - thumbH - 1
+
+	idx := 0
+	for _, w := range visible {
+		if w.ID == focusedWin.ID {
+			continue
+		}
+		x := startX + idx*(thumbW+1)
+		if mouseX >= x && mouseX < x+thumbW && mouseY >= thumbY && mouseY < thumbY+thumbH {
+			m.wm.FocusWindow(w.ID)
+			return
+		}
+		idx++
+	}
+}
+
+// selectExposeByIndex selects the Nth visible window (0-based) in exposé mode.
+func (m *Model) selectExposeByIndex(idx int) {
+	var visible []*window.Window
+	for _, w := range m.wm.Windows() {
+		if w.Visible && !w.Minimized {
+			visible = append(visible, w)
+		}
+	}
+	if idx >= 0 && idx < len(visible) {
+		m.wm.FocusWindow(visible[idx].ID)
 	}
 }
 
@@ -529,6 +1510,25 @@ func (m *Model) resizeTerminalForWindow(w *window.Window) {
 	}
 }
 
+// animateTileAll tiles all windows with animations.
+func (m *Model) animateTileAll() {
+	windows := m.wm.Windows()
+	// Save current rects
+	fromRects := make(map[string]geometry.Rect, len(windows))
+	for _, w := range windows {
+		fromRects[w.ID] = w.Rect
+	}
+	// Apply tiling
+	window.TileAll(windows, m.wm.WorkArea())
+	// Create animations
+	for _, w := range windows {
+		if from, ok := fromRects[w.ID]; ok {
+			m.startWindowAnimation(w.ID, AnimTile, from, w.Rect)
+		}
+	}
+	m.resizeAllTerminals()
+}
+
 // resizeAllTerminals resizes all terminals to match their windows.
 func (m *Model) resizeAllTerminals() {
 	for _, w := range m.wm.Windows() {
@@ -536,21 +1536,296 @@ func (m *Model) resizeAllTerminals() {
 	}
 }
 
+// handleMenuBarRightClick handles clicks on the right side of the menu bar.
+func (m Model) handleMenuBarRightClick(zoneType string) (tea.Model, tea.Cmd) {
+	switch zoneType {
+	case "cpu", "mem":
+		cmd := m.openTerminalWindowMaximized("btop", nil)
+		return m, cmd
+	case "clock":
+		m.modal = &ModalOverlay{
+			Title: "Date & Time",
+			Lines: []string{
+				time.Now().Format("Monday, January 2, 2006"),
+				time.Now().Format("03:04:05 PM MST"),
+			},
+		}
+	}
+	return m, nil
+}
+
+// helpOverlay returns a modal with keybinding help.
+func (m *Model) helpOverlay() *ModalOverlay {
+	return &ModalOverlay{
+		Title: "Keybindings",
+		Lines: []string{
+			"Global (any mode):",
+			"  F1            This Help",
+			"  F9            Toggle Expose\u0301",
+			"  F10           Menu Bar",
+			"",
+			"NORMAL mode (window management):",
+			"  q             Quit",
+			"  i / Enter     \u2192 Terminal mode",
+			"  n / Ctrl+N    New Terminal",
+			"  w / Ctrl+W    Close Window",
+			"  m             Minimize to Dock",
+			"  d             Navigate Dock",
+			"  Space/Ctrl+Sp Launcher",
+			"  Tab           Next Window",
+			"  h / l         Snap Left/Right",
+			"  j / k         Restore / Maximize",
+			"  t             Tile All",
+			"  x             Exposé",
+			"  f / a / v     File / Apps / View menu",
+			"  1-9           Focus Window #N",
+			"",
+			"NORMAL + Dock (d):",
+			"  \u2190/\u2192 h/l       Navigate items",
+			"  Enter         Activate / Restore",
+			"  Esc           Exit dock",
+			"",
+			"TERMINAL mode (keys \u2192 terminal):",
+			"  Esc           \u2192 Normal mode",
+			"",
+			"Expose\u0301:",
+			"  Tab / Arrows  Navigate",
+			"  Enter         Select window",
+			"  Esc           Cancel",
+		},
+	}
+}
+
+// aboutOverlay returns a modal with app info.
+func (m *Model) aboutOverlay() *ModalOverlay {
+	return &ModalOverlay{
+		Title: "About",
+		Lines: []string{
+			"termdesk " + version,
+			"",
+			"A retro TUI desktop environment",
+			"built with Go + Bubble Tea v2",
+			"",
+			"github.com/icex/termdesk",
+		},
+	}
+}
+
+// minimizeWindow animates a window shrinking to the dock area.
+func (m *Model) minimizeWindow(w *window.Window) {
+	if w.Minimized {
+		return
+	}
+	// Animate shrink to dock bar center
+	dockY := m.height - 1
+	dockX := m.width / 2
+	m.startWindowAnimation(w.ID, AnimMinimize, w.Rect,
+		geometry.Rect{X: dockX, Y: dockY, Width: 1, Height: 1})
+
+	// Unfocus the minimized window and focus next visible one
+	m.wm.FocusNextVisible(w.ID)
+	m.inputMode = ModeNormal
+}
+
+// restoreMinimizedWindow animates a minimized window back to its original rect.
+func (m *Model) restoreMinimizedWindow(w *window.Window) {
+	if !w.Minimized {
+		return
+	}
+	w.Minimized = false
+	m.wm.FocusWindow(w.ID)
+	m.inputMode = ModeNormal
+	// Animate from dock to original position
+	dockY := m.height - 1
+	dockX := m.width / 2
+	m.startWindowAnimation(w.ID, AnimRestore2,
+		geometry.Rect{X: dockX, Y: dockY, Width: 1, Height: 1},
+		w.Rect)
+}
+
+// updateDockRunning syncs the dock's running indicators and minimized windows.
+func (m *Model) updateDockRunning() {
+	running := make(map[string]bool)
+	for _, w := range m.wm.Windows() {
+		if !w.Minimized {
+			if w.Command != "" {
+				running[w.Command] = true
+			} else {
+				running["$SHELL"] = true
+			}
+		}
+	}
+	m.dock.RunningCommands = running
+
+	// Remove stale minimized items, then add current minimized windows
+	var baseItems []dock.DockItem
+	for _, item := range m.dock.Items {
+		if item.Special != "minimized" {
+			baseItems = append(baseItems, item)
+		}
+	}
+	// Insert minimized windows before the Exposé button (last item)
+	// Collect minimized windows
+	var minimized []*window.Window
+	for _, w := range m.wm.Windows() {
+		if w.Minimized {
+			minimized = append(minimized, w)
+		}
+	}
+
+	// Build minimized dock items with full names first
+	var minItems []dock.DockItem
+	for _, w := range minimized {
+		icon, _ := minimizedDockLabel(w)
+		minItems = append(minItems, dock.DockItem{
+			Icon:     icon,
+			Label:    w.Title,
+			Special:  "minimized",
+			WindowID: w.ID,
+		})
+	}
+
+	// Check if full names fit — estimate total dock width
+	totalW := 0
+	for _, item := range baseItems {
+		totalW += utf8.RuneCountInString(item.Icon) + 1 + utf8.RuneCountInString(item.Label) + 3 // icon+space+label+sep
+	}
+	for _, item := range minItems {
+		totalW += utf8.RuneCountInString(item.Icon) + 1 + utf8.RuneCountInString(item.Label) + 3
+	}
+
+	// If too wide, shorten minimized labels progressively
+	if totalW > m.width-4 && len(minItems) > 0 {
+		// Try truncating to 8 chars
+		for i, item := range minItems {
+			titleRunes := []rune(item.Label)
+			if len(titleRunes) > 8 {
+				minItems[i].Label = string(titleRunes[:8])
+			}
+		}
+		// Recalculate
+		totalW = 0
+		for _, item := range baseItems {
+			totalW += utf8.RuneCountInString(item.Icon) + 1 + utf8.RuneCountInString(item.Label) + 3
+		}
+		for _, item := range minItems {
+			totalW += utf8.RuneCountInString(item.Icon) + 1 + utf8.RuneCountInString(item.Label) + 3
+		}
+		// If still too wide, use short abbreviations
+		if totalW > m.width-4 {
+			for i := range minItems {
+				_, shortLabel := minimizedDockLabel(minimized[i])
+				minItems[i].Label = shortLabel
+			}
+		}
+	}
+
+	// Insert minimized items before the Exposé button
+	var result []dock.DockItem
+	for _, item := range baseItems {
+		if item.Special == "expose" {
+			result = append(result, minItems...)
+		}
+		result = append(result, item)
+	}
+	m.dock.Items = result
+}
+
+// minimizedDockLabel returns a short icon and label for a minimized window in the dock.
+// Maps common commands to recognizable abbreviations (e.g. Terminal → "T", nvim → "V").
+func minimizedDockLabel(w *window.Window) (icon, label string) {
+	cmd := w.Command
+	switch {
+	case cmd == "" || cmd == "$SHELL":
+		return "\uf120", "T" //  terminal
+	case cmd == "nvim" || cmd == "vim" || cmd == "vi":
+		return "\ue62b", "V" //  vim
+	case cmd == "spf" || cmd == "ranger" || cmd == "lf" || cmd == "yazi":
+		return "\uf07b", "F" //  files
+	case cmd == "btop" || cmd == "htop" || cmd == "top":
+		return "\uf200", "B" //  monitor
+	case cmd == "python3" || cmd == "python" || cmd == "bc":
+		return "\uf1ec", "C" //  calc
+	case cmd == "mc":
+		return "\uf07b", "MC" //  commander
+	default:
+		// First letter of command, uppercased
+		if len(cmd) > 0 {
+			return "\uf2d0", strings.ToUpper(cmd[:1])
+		}
+		return "\uf2d0", "?"
+	}
+}
+
+// teaToUvButton converts a Bubble Tea mouse button to an ultraviolet MouseButton.
+func teaToUvButton(b tea.MouseButton) uv.MouseButton {
+	switch b {
+	case tea.MouseLeft:
+		return uv.MouseLeft
+	case tea.MouseMiddle:
+		return uv.MouseMiddle
+	case tea.MouseRight:
+		return uv.MouseRight
+	case tea.MouseWheelUp:
+		return uv.MouseWheelUp
+	case tea.MouseWheelDown:
+		return uv.MouseWheelDown
+	default:
+		return uv.MouseNone
+	}
+}
+
 func (m Model) View() tea.View {
 	var v tea.View
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeAllMotion
+	v.MouseMode = tea.MouseModeCellMotion // CellMotion (1002) is more compatible with Termux than AllMotion (1003)
 
 	if !m.ready {
 		v.SetContent("Starting termdesk...")
 		return v
 	}
 
-	buf := RenderFrame(m.wm, m.theme, m.terminals)
-	RenderMenuBar(buf, m.menuBar, m.theme)
-	RenderDock(buf, m.dock, m.theme)
+	// Update dock running indicators from window manager state
+	m.updateDockRunning()
+
+	// Check for expose enter/exit animations
+	if m.hasExposeAnimations() {
+		buf := RenderExposeTransition(m.wm, m.theme, m.animations)
+		RenderMenuBar(buf, m.menuBar, m.theme, m.inputMode)
+		RenderDock(buf, m.dock, m.theme, nil)
+		v.SetContent(BufferToString(buf))
+		return v
+	}
+
+	if m.exposeMode {
+		buf := RenderExpose(m.wm, m.theme)
+		RenderMenuBar(buf, m.menuBar, m.theme, m.inputMode)
+		RenderDock(buf, m.dock, m.theme, nil)
+		v.SetContent(BufferToString(buf))
+		return v
+	}
+
+	// Build animated rect overrides for windows currently animating
+	var animRects map[string]geometry.Rect
+	if m.hasActiveAnimations() {
+		animRects = make(map[string]geometry.Rect)
+		for _, w := range m.wm.Windows() {
+			if r, ok := m.animatedRect(w.ID); ok {
+				animRects[w.ID] = r
+			}
+		}
+	}
+	buf := RenderFrame(m.wm, m.theme, m.terminals, animRects)
+	RenderMenuBar(buf, m.menuBar, m.theme, m.inputMode)
+	RenderDock(buf, m.dock, m.theme, m.animations)
 	if m.launcher.Visible {
 		RenderLauncher(buf, m.launcher, m.theme)
+	}
+	if m.confirmClose != nil {
+		RenderConfirmDialog(buf, m.confirmClose, m.theme)
+	}
+	if m.modal != nil {
+		RenderModal(buf, m.modal, m.theme)
 	}
 	v.SetContent(BufferToString(buf))
 	return v

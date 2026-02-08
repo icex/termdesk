@@ -2,12 +2,19 @@ package app
 
 import (
 	"testing"
+	"time"
 
 	"github.com/icex/termdesk/internal/window"
 	"github.com/icex/termdesk/pkg/geometry"
 
 	tea "charm.land/bubbletea/v2"
 )
+
+// completeAnimations sends a tick far enough in the future to finish all animations.
+func completeAnimations(m Model) Model {
+	updated, _ := m.Update(AnimationTickMsg{Time: time.Now().Add(time.Second)})
+	return updated.(Model)
+}
 
 func setupReadyModel() Model {
 	m := New()
@@ -35,8 +42,9 @@ func TestNew(t *testing.T) {
 
 func TestInit(t *testing.T) {
 	m := New()
-	if m.Init() != nil {
-		t.Error("expected nil cmd from Init")
+	cmd := m.Init()
+	if cmd == nil {
+		t.Error("expected non-nil cmd from Init (system stats tick)")
 	}
 }
 
@@ -51,34 +59,64 @@ func TestUpdateWindowSize(t *testing.T) {
 
 func TestQuitCtrlC(t *testing.T) {
 	m := setupReadyModel()
-	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
+	updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
+	model := updated.(Model)
+	if cmd != nil {
+		t.Error("ctrl+c should show confirm dialog, not quit immediately")
+	}
+	if model.confirmClose == nil || !model.confirmClose.IsQuit {
+		t.Fatal("expected quit confirm dialog")
+	}
+	// Confirm with 'y'
+	updated, cmd = model.Update(tea.KeyPressMsg(tea.Key{Code: 'y', Text: "y"}))
 	if cmd == nil {
-		t.Error("expected quit on ctrl+c")
+		t.Error("expected quit cmd after confirming")
 	}
 }
 
 func TestQuitCtrlQ(t *testing.T) {
 	m := setupReadyModel()
-	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'q', Mod: tea.ModCtrl}))
+	updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'q', Mod: tea.ModCtrl}))
+	model := updated.(Model)
+	if cmd != nil {
+		t.Error("ctrl+q should show confirm dialog, not quit immediately")
+	}
+	if model.confirmClose == nil || !model.confirmClose.IsQuit {
+		t.Fatal("expected quit confirm dialog")
+	}
+	// Confirm with enter
+	_, cmd = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	if cmd == nil {
-		t.Error("expected quit on ctrl+q")
+		t.Error("expected quit cmd after confirming")
 	}
 }
 
 func TestQuitQNoWindows(t *testing.T) {
 	m := setupReadyModel()
-	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'q'}))
-	if cmd == nil {
-		t.Error("expected quit on q when no windows focused")
+	// In Normal mode, 'q' shows confirm dialog
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'q'}))
+	m2 := updated.(Model)
+	if m2.confirmClose == nil {
+		t.Error("expected confirm dialog on q when no windows focused")
 	}
+	// Pressing 'y' should quit
+	updated, cmd := m2.Update(tea.KeyPressMsg(tea.Key{Code: 'y'}))
+	if cmd == nil {
+		t.Error("expected quit cmd after confirming with y")
+	}
+	_ = updated
 }
 
 func TestNoQuitQWithWindows(t *testing.T) {
 	m := setupReadyModel()
 	m.openDemoWindow()
-	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'q'}))
-	if cmd != nil {
-		t.Error("q should not quit when a window is focused")
+	// Window is focused, 'q' in terminal mode does nothing (goes to terminal)
+	// but our demo windows are not terminals, so they fall through to normal mode
+	// In normal mode with a focused window, 'q' shows confirm dialog
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'q'}))
+	m2 := updated.(Model)
+	if m2.confirmClose == nil {
+		t.Error("expected confirm dialog on q with windows")
 	}
 }
 
@@ -91,19 +129,20 @@ func TestCtrlNOpensWindow(t *testing.T) {
 	}
 }
 
-func TestAltTabCycles(t *testing.T) {
+func TestCtrlBracketCycles(t *testing.T) {
 	m := setupReadyModel()
 	m.openDemoWindow()
 	m.openDemoWindow()
 
 	focused1 := m.wm.FocusedWindow().ID
 
-	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModAlt}))
+	// Ctrl+] cycles forward (always works, even with terminal focus)
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: ']', Mod: tea.ModCtrl}))
 	model := updated.(Model)
 	focused2 := model.wm.FocusedWindow().ID
 
 	if focused1 == focused2 {
-		t.Error("alt+tab should change focused window")
+		t.Error("ctrl+] should change focused window")
 	}
 }
 
@@ -114,10 +153,46 @@ func TestCtrlWCloses(t *testing.T) {
 		t.Fatal("expected 1 window")
 	}
 
+	// Ctrl+W should show confirm dialog
 	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'w', Mod: tea.ModCtrl}))
 	model := updated.(Model)
+	if model.confirmClose == nil {
+		t.Fatal("expected close confirm dialog")
+	}
+	if model.wm.Count() != 1 {
+		t.Error("window should still exist before confirmation")
+	}
+
+	// Confirm with 'y' — starts close animation
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: 'y', Text: "y"}))
+	model = updated.(Model)
+
+	// Complete the close animation
+	model = completeAnimations(model)
 	if model.wm.Count() != 0 {
-		t.Errorf("expected 0 windows after ctrl+w, got %d", model.wm.Count())
+		t.Errorf("expected 0 windows after close animation, got %d", model.wm.Count())
+	}
+}
+
+func TestConfirmDialogCancel(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+
+	// Ctrl+W opens confirm
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'w', Mod: tea.ModCtrl}))
+	model := updated.(Model)
+	if model.confirmClose == nil {
+		t.Fatal("expected confirm dialog")
+	}
+
+	// Press 'n' to cancel
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: 'n', Text: "n"}))
+	model = updated.(Model)
+	if model.confirmClose != nil {
+		t.Error("confirm dialog should be dismissed")
+	}
+	if model.wm.Count() != 1 {
+		t.Error("window should still exist after cancel")
 	}
 }
 
@@ -132,15 +207,19 @@ func TestSnapLeftRight(t *testing.T) {
 	m.openDemoWindow()
 	wa := m.wm.WorkArea()
 
-	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft, Mod: tea.ModCtrl}))
+	// In Normal mode, 'h' or 'left' snaps left
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'h'}))
 	model := updated.(Model)
+	model = completeAnimations(model)
 	fw := model.wm.FocusedWindow()
 	if fw.Rect.Width != wa.Width/2 {
 		t.Errorf("snap left: width = %d, want %d", fw.Rect.Width, wa.Width/2)
 	}
 
-	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyRight, Mod: tea.ModCtrl}))
+	// 'l' snaps right
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: 'l'}))
 	model = updated.(Model)
+	model = completeAnimations(model)
 	fw = model.wm.FocusedWindow()
 	if fw.Rect.X != wa.Width/2 {
 		t.Errorf("snap right: x = %d, want %d", fw.Rect.X, wa.Width/2)
@@ -152,16 +231,20 @@ func TestMaximizeRestore(t *testing.T) {
 	m.openDemoWindow()
 	origRect := m.wm.FocusedWindow().Rect
 
-	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp, Mod: tea.ModCtrl}))
+	// In Normal mode, 'k' or 'up' maximizes
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'k'}))
 	model := updated.(Model)
+	model = completeAnimations(model)
 	if !model.wm.FocusedWindow().IsMaximized() {
-		t.Error("expected maximized after ctrl+up")
+		t.Error("expected maximized after k (maximize)")
 	}
 
-	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown, Mod: tea.ModCtrl}))
+	// 'j' or 'down' restores
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: 'j'}))
 	model = updated.(Model)
+	model = completeAnimations(model)
 	if model.wm.FocusedWindow().Rect != origRect {
-		t.Error("expected original rect after ctrl+down restore")
+		t.Error("expected original rect after j (restore)")
 	}
 }
 
@@ -170,8 +253,10 @@ func TestTileAll(t *testing.T) {
 	m.openDemoWindow()
 	m.openDemoWindow()
 
-	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 't', Mod: tea.ModCtrl}))
+	// In Normal mode, 't' tiles all windows
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 't'}))
 	model := updated.(Model)
+	model = completeAnimations(model)
 	windows := model.wm.Windows()
 	if windows[0].Rect.Width != 60 {
 		t.Errorf("tile: w1 width = %d, want 60", windows[0].Rect.Width)
@@ -202,13 +287,26 @@ func TestMouseClickClose(t *testing.T) {
 	m.openDemoWindow()
 	w := m.wm.FocusedWindow()
 
-	// Click close button position
+	// Click close button position — should show confirm dialog
 	closePos := w.CloseButtonPos()
 	click := tea.MouseClickMsg(tea.Mouse{X: closePos.X + 1, Y: closePos.Y, Button: tea.MouseLeft})
 	updated, _ := m.Update(click)
 	model := updated.(Model)
+	if model.confirmClose == nil {
+		t.Fatal("expected close confirm dialog")
+	}
+	if model.wm.Count() != 1 {
+		t.Error("window should still exist before confirmation")
+	}
+
+	// Confirm with 'y' — starts close animation
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: 'y', Text: "y"}))
+	model = updated.(Model)
+
+	// Complete the close animation
+	model = completeAnimations(model)
 	if model.wm.Count() != 0 {
-		t.Errorf("expected window closed, count = %d", model.wm.Count())
+		t.Errorf("expected window closed after close animation, count = %d", model.wm.Count())
 	}
 }
 
@@ -309,8 +407,8 @@ func TestViewSetsAltScreen(t *testing.T) {
 	if !v.AltScreen {
 		t.Error("expected AltScreen")
 	}
-	if v.MouseMode != tea.MouseModeAllMotion {
-		t.Error("expected MouseModeAllMotion")
+	if v.MouseMode != tea.MouseModeCellMotion {
+		t.Error("expected MouseModeCellMotion")
 	}
 }
 
@@ -348,11 +446,11 @@ func TestOpenDemoWindowMinSize(t *testing.T) {
 
 func TestSnapNoWindowNoPanic(t *testing.T) {
 	m := setupReadyModel()
-	// These should not panic with no focused window
-	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft, Mod: tea.ModCtrl}))
-	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyRight, Mod: tea.ModCtrl}))
-	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp, Mod: tea.ModCtrl}))
-	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown, Mod: tea.ModCtrl}))
+	// These should not panic with no focused window (Normal mode keys)
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'h'}))
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'l'}))
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'k'}))
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'j'}))
 }
 
 func TestDragUnmaximizes(t *testing.T) {
@@ -684,10 +782,23 @@ func TestLauncherCtrlQStillQuits(t *testing.T) {
 	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: ' ', Mod: tea.ModCtrl}))
 	model := updated.(Model)
 
-	// Ctrl+Q should still quit even with launcher open
-	_, cmd := model.Update(tea.KeyPressMsg(tea.Key{Code: 'q', Mod: tea.ModCtrl}))
+	// Ctrl+Q should show confirm dialog (launcher hides + dialog shows)
+	updated, cmd := model.Update(tea.KeyPressMsg(tea.Key{Code: 'q', Mod: tea.ModCtrl}))
+	model = updated.(Model)
+	if cmd != nil {
+		t.Error("ctrl+q should show confirm dialog, not quit immediately")
+	}
+	if model.launcher.Visible {
+		t.Error("launcher should be hidden")
+	}
+	if model.confirmClose == nil || !model.confirmClose.IsQuit {
+		t.Fatal("expected quit confirm dialog")
+	}
+
+	// Confirm with 'y'
+	_, cmd = model.Update(tea.KeyPressMsg(tea.Key{Code: 'y', Text: "y"}))
 	if cmd == nil {
-		t.Error("ctrl+q should quit even with launcher open")
+		t.Error("expected quit cmd after confirming")
 	}
 }
 
@@ -712,10 +823,13 @@ func TestPtyClosedClosesWindow(t *testing.T) {
 		t.Fatal("expected 1 window")
 	}
 
-	// Simulate PTY closed message
+	// Simulate PTY closed message — starts close animation
 	updated, _ := m.Update(PtyClosedMsg{WindowID: winID})
 	model := updated.(Model)
+
+	// Complete the close animation
+	model = completeAnimations(model)
 	if model.wm.Count() != 0 {
-		t.Errorf("expected 0 windows after PtyClosedMsg, got %d", model.wm.Count())
+		t.Errorf("expected 0 windows after close animation, got %d", model.wm.Count())
 	}
 }

@@ -10,7 +10,9 @@ import (
 )
 
 func main() {
-	p := tea.NewProgram(app.New())
+	m := app.New()
+	p := tea.NewProgram(m)
+	m.SetProgram(p)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "termdesk: %v\n", err)
 		os.Exit(1)

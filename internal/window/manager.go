@@ -97,9 +97,28 @@ func (m *Manager) FocusWindow(id string) {
 	}
 
 	target.Focused = true
+	target.HasNotification = false
 	target.ZIndex = m.nextZIndex
 	m.nextZIndex++
 	m.focused = id
+}
+
+// FocusNextVisible focuses the topmost visible, non-minimized window
+// excluding the given ID. If none exist, all windows are unfocused.
+func (m *Manager) FocusNextVisible(excludeID string) {
+	// Unfocus all first
+	for _, w := range m.windows {
+		w.Focused = false
+	}
+	m.focused = ""
+	// Walk back-to-front (topmost = last) to find the best candidate
+	for i := len(m.windows) - 1; i >= 0; i-- {
+		w := m.windows[i]
+		if w.ID != excludeID && w.Visible && !w.Minimized {
+			m.FocusWindow(w.ID)
+			return
+		}
+	}
 }
 
 // FocusedWindow returns the currently focused window, or nil.

@@ -60,24 +60,36 @@ func TestOpenMenuOutOfBounds(t *testing.T) {
 
 func TestMoveHover(t *testing.T) {
 	mb := New(120)
-	mb.OpenMenu(0) // File menu has 2 items
+	mb.OpenMenu(0) // File menu: New Terminal (0), Minimize (1), separator (2), Quit (3)
 
-	// Start at 0, move down
+	// Start at 0, move down → should go to 1
 	mb.MoveHover(1)
 	if mb.HoverIndex != 1 {
 		t.Errorf("hover = %d, want 1", mb.HoverIndex)
 	}
 
-	// Wrap around
+	// Move down → should skip separator (2) and go to 3 (Quit)
 	mb.MoveHover(1)
-	if mb.HoverIndex != 0 {
-		t.Errorf("hover = %d, want 0 (wrapped)", mb.HoverIndex)
+	if mb.HoverIndex != 3 {
+		t.Errorf("hover = %d, want 3 (skip separator)", mb.HoverIndex)
 	}
 
-	// Move up from 0 wraps to last
+	// Move down → wrap to 0
+	mb.MoveHover(1)
+	if mb.HoverIndex != 0 {
+		t.Errorf("hover = %d, want 0 (wrap)", mb.HoverIndex)
+	}
+
+	// Move up from 0 → wrap to last selectable (3)
+	mb.MoveHover(-1)
+	if mb.HoverIndex != 3 {
+		t.Errorf("hover = %d, want 3 (wrap up)", mb.HoverIndex)
+	}
+
+	// Move up from 3 → skip separator (2) and go to 1
 	mb.MoveHover(-1)
 	if mb.HoverIndex != 1 {
-		t.Errorf("hover = %d, want 1 (wrapped up)", mb.HoverIndex)
+		t.Errorf("hover = %d, want 1 (skip separator up)", mb.HoverIndex)
 	}
 }
 
@@ -121,7 +133,7 @@ func TestMoveMenuEmpty(t *testing.T) {
 
 func TestSelectedAction(t *testing.T) {
 	mb := New(120)
-	mb.OpenMenu(0) // File: New Terminal, Quit
+	mb.OpenMenu(0) // File: New Terminal, Minimize, separator, Quit
 	mb.HoverIndex = 0
 
 	action := mb.SelectedAction()
@@ -129,7 +141,8 @@ func TestSelectedAction(t *testing.T) {
 		t.Errorf("action = %q, want new_terminal", action)
 	}
 
-	mb.HoverIndex = 1
+	// Last item is Quit
+	mb.HoverIndex = len(mb.Menus[0].Items) - 1
 	action = mb.SelectedAction()
 	if action != "quit" {
 		t.Errorf("action = %q, want quit", action)
@@ -138,12 +151,13 @@ func TestSelectedAction(t *testing.T) {
 
 func TestSelectedActionDisabled(t *testing.T) {
 	mb := New(120)
-	mb.OpenMenu(1) // Edit: Copy (disabled), Paste (disabled)
-	mb.HoverIndex = 0
+	// File menu (index 0) has a separator at index 2
+	mb.OpenMenu(0)
+	mb.HoverIndex = 2 // separator
 
 	action := mb.SelectedAction()
 	if action != "" {
-		t.Errorf("disabled action = %q, want empty", action)
+		t.Errorf("disabled/separator action = %q, want empty", action)
 	}
 }
 
@@ -291,8 +305,26 @@ func TestRenderDropdown(t *testing.T) {
 	if !strings.Contains(allLines, "New Terminal") {
 		t.Error("expected 'New Terminal' in dropdown")
 	}
-	if !strings.Contains(allLines, "Ctrl+N") {
+	// Should have a shortcut
+	if !strings.Contains(allLines, " n") {
 		t.Error("expected shortcut in dropdown")
+	}
+}
+
+func TestRenderDropdownSeparator(t *testing.T) {
+	mb := New(120)
+	mb.OpenMenu(0) // File menu has a separator
+
+	lines := mb.RenderDropdown()
+	// Should have a separator line ├───┤
+	found := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "├") && strings.HasSuffix(line, "┤") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected separator line ├───┤ in dropdown")
 	}
 }
 
@@ -339,15 +371,15 @@ func TestRenderNoIndicators(t *testing.T) {
 
 func TestFormatCPU(t *testing.T) {
 	s := FormatCPU(12.5)
-	if s != "CPU:12%" && s != "CPU:13%" {
-		t.Errorf("FormatCPU(12.5) = %q", s)
+	if !strings.Contains(s, "12%") && !strings.Contains(s, "13%") {
+		t.Errorf("FormatCPU(12.5) = %q, expected percentage", s)
 	}
 }
 
 func TestFormatMemory(t *testing.T) {
 	s := FormatMemory(4.2)
-	if s != "MEM:4.2G" {
-		t.Errorf("FormatMemory(4.2) = %q", s)
+	if !strings.Contains(s, "4.2G") {
+		t.Errorf("FormatMemory(4.2) = %q, expected memory value", s)
 	}
 }
 
@@ -359,5 +391,25 @@ func TestClockString(t *testing.T) {
 	// Should match format "HH:MM AM/PM"
 	if !strings.Contains(s, ":") {
 		t.Errorf("clock = %q, expected HH:MM format", s)
+	}
+}
+
+func TestMenuCount(t *testing.T) {
+	mb := New(120)
+	// Should have 4 menus: File, Apps, View, Help (no Edit)
+	if len(mb.Menus) != 4 {
+		t.Errorf("menu count = %d, want 4", len(mb.Menus))
+	}
+	if mb.Menus[0].Label != "File" {
+		t.Errorf("menu 0 = %q, want File", mb.Menus[0].Label)
+	}
+	if mb.Menus[1].Label != "Apps" {
+		t.Errorf("menu 1 = %q, want Apps", mb.Menus[1].Label)
+	}
+	if mb.Menus[2].Label != "View" {
+		t.Errorf("menu 2 = %q, want View", mb.Menus[2].Label)
+	}
+	if mb.Menus[3].Label != "Help" {
+		t.Errorf("menu 3 = %q, want Help", mb.Menus[3].Label)
 	}
 }

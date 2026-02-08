@@ -44,7 +44,10 @@ const (
 	HitNone HitZone = iota
 	HitTitleBar
 	HitCloseButton
+	HitMinButton
 	HitMaxButton
+	HitSnapRightButton
+	HitSnapLeftButton
 	HitContent
 	HitBorderN
 	HitBorderS
@@ -68,19 +71,44 @@ func HitTest(w *Window, p geometry.Point, closeButtonWidth, maxButtonWidth int) 
 	localY := p.Y - r.Y
 	lastCol := r.Width - 1
 	lastRow := r.Height - 1
+	tbh := w.titleBarRows()
 
-	// Title bar (top row)
-	if localY == 0 {
-		// Close button: rightmost in title bar
-		closeStart := lastCol - closeButtonWidth
-		if localX > closeStart && localX <= lastCol {
-			return HitCloseButton
+	// Title bar area (may be multiple rows)
+	if localY < tbh {
+		// Buttons are on the center row of the title bar
+		btnRow := tbh / 2
+		if localY == btnRow || tbh == 1 {
+			// Buttons right-to-left: [snapL][snapR][max][_][×]
+			closeStart := lastCol - closeButtonWidth
+			if localX > closeStart && localX <= lastCol {
+				return HitCloseButton
+			}
+			minStart := closeStart - 3 // [_] is 3 chars
+			if localX > minStart && localX <= closeStart {
+				return HitMinButton
+			}
+			if w.Resizable {
+				maxStart := minStart - maxButtonWidth
+				if localX > maxStart && localX <= minStart {
+					return HitMaxButton
+				}
+				snapRStart := maxStart - 3
+				if localX > snapRStart && localX <= maxStart {
+					return HitSnapRightButton
+				}
+				snapLStart := snapRStart - 3
+				if localX > snapLStart && localX <= snapRStart {
+					return HitSnapLeftButton
+				}
+			}
 		}
-		// Max button: just before close button
-		if w.Resizable {
-			maxStart := closeStart - maxButtonWidth
-			if localX > maxStart && localX <= closeStart {
-				return HitMaxButton
+		// Top-left / top-right corners on first row = resize zones
+		if localY == 0 {
+			if localX == 0 {
+				return HitBorderNW
+			}
+			if localX == lastCol {
+				return HitBorderNE
 			}
 		}
 		return HitTitleBar

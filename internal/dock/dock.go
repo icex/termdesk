@@ -2,34 +2,52 @@ package dock
 
 import (
 	"strings"
+	"unicode/utf8"
 )
 
 // DockItem represents a launchable app in the dock.
 type DockItem struct {
-	Icon    string // Nerd Font icon
-	Label   string
-	Command string
-	Args    []string
+	Icon     string // Nerd Font icon
+	Label    string
+	Command  string
+	Args     []string
+	Special  string // "launcher", "expose", "minimized", or "" for normal items
+	WindowID string // window ID for minimized items
+}
+
+// DockCell represents a single cell in the dock render output with styling info.
+type DockCell struct {
+	Char      rune
+	Accent    bool // true = use accent color (hovered item)
+	Special   bool // true = use a distinct style (launcher/expose buttons)
+	Minimized bool // true = minimized window item
+	Indicator bool // true = running indicator dot
+	Pulse     bool // true = dock launch pulse animation active
 }
 
 // Dock represents the bottom dock bar.
 type Dock struct {
-	Items      []DockItem
-	Width      int
-	HoverIndex int // -1 = none
+	Items           []DockItem
+	Width           int
+	HoverIndex      int  // -1 = none
+	IconsOnly       bool // true = show only icons, no labels
+	RunningCommands map[string]bool // set of commands that have running windows
 }
 
 // New creates a dock with default items.
 func New(width int) *Dock {
 	return &Dock{
 		Items: []DockItem{
-			{Icon: "", Label: "Terminal", Command: "$SHELL"},
-			{Icon: "", Label: "nvim", Command: "nvim"},
-			{Icon: "", Label: "Files", Command: "spf"},
-			{Icon: "", Label: "Calc", Command: "calc"},
+			{Icon: "\uf135", Label: "Launch", Special: "launcher"},
+			{Icon: "\uf120", Label: "Terminal", Command: "$SHELL"},
+			{Icon: "\ue62b", Label: "nvim", Command: "nvim"},
+			{Icon: "\uf07b", Label: "Files", Command: "spf"},
+			{Icon: "\uf1ec", Label: "Calc", Command: "python3"},
+			{Icon: "\uf26c", Label: "Expose\u0301", Special: "expose"},
 		},
-		Width:      width,
-		HoverIndex: -1,
+		Width:           width,
+		HoverIndex:      -1,
+		RunningCommands: make(map[string]bool),
 	}
 }
 
@@ -62,13 +80,22 @@ func (d *Dock) SetHover(idx int) {
 	}
 }
 
+// IsRunning returns whether a dock item has a running window.
+func (d *Dock) IsRunning(idx int) bool {
+	if idx < 0 || idx >= len(d.Items) {
+		return false
+	}
+	cmd := d.Items[idx].Command
+	return cmd != "" && d.RunningCommands[cmd]
+}
+
 // Render returns the dock bar as a single string.
 func (d *Dock) Render(width int) string {
 	var sb strings.Builder
 
 	// Center the dock items
 	content := d.renderItems()
-	contentLen := runeCount(content)
+	contentLen := utf8.RuneCountInString(content)
 	padding := (width - contentLen) / 2
 	if padding < 0 {
 		padding = 0
@@ -86,33 +113,108 @@ func (d *Dock) Render(width int) string {
 	return sb.String()
 }
 
+// RenderCells returns dock content as structured cells for per-cell styling.
+func (d *Dock) RenderCells(width int) []DockCell {
+	cells := make([]DockCell, width)
+
+	// Build content and track which cells belong to which item
+	type itemSpan struct {
+		start, end int
+		index      int
+	}
+
+	content := d.renderItems()
+	contentLen := utf8.RuneCountInString(content)
+	padding := (width - contentLen) / 2
+	if padding < 0 {
+		padding = 0
+	}
+
+	// Build span map
+	var spans []itemSpan
+	x := padding
+	sep := d.separatorWidth()
+	for i := range d.Items {
+		iw := d.itemWidth(i)
+		spans = append(spans, itemSpan{start: x, end: x + iw, index: i})
+		x += iw + sep
+	}
+
+	// Fill cells
+	col := 0
+	for _, ch := range d.Render(width) {
+		if col >= width {
+			break
+		}
+		cell := DockCell{Char: ch}
+		for _, span := range spans {
+			if col >= span.start && col < span.end {
+				if span.index == d.HoverIndex {
+					cell.Accent = true
+				}
+				item := d.Items[span.index]
+				if item.Special == "minimized" {
+					cell.Minimized = true
+				} else if item.Special != "" {
+					cell.Special = true
+				}
+				break
+			}
+		}
+		cells[col] = cell
+		col++
+	}
+
+	return cells
+}
+
 func (d *Dock) renderItems() string {
 	var parts []string
 	for i, item := range d.Items {
-		s := item.Icon + " " + item.Label
+		var s string
+		if d.IconsOnly {
+			s = item.Icon
+		} else {
+			s = item.Icon + " " + item.Label
+		}
+		// Running indicator dot (macOS-like)
+		if d.IsRunning(i) {
+			s += "\u00b7" // middle dot ·
+		}
 		if i == d.HoverIndex {
 			s = "[" + s + "]"
 		}
 		parts = append(parts, s)
 	}
-	return strings.Join(parts, " │ ")
+	sep := " " + string('\u2502') + " " // " │ "
+	if d.IconsOnly {
+		sep = " " // thin separator for icons-only
+	}
+	return strings.Join(parts, sep)
+}
+
+func (d *Dock) separatorWidth() int {
+	if d.IconsOnly {
+		return 1 // just a space
+	}
+	return 3 // " │ "
 }
 
 func (d *Dock) itemPositions() []int {
 	positions := make([]int, len(d.Items))
 	content := d.renderItems()
-	contentLen := runeCount(content)
+	contentLen := utf8.RuneCountInString(content)
 	padding := (d.Width - contentLen) / 2
 	if padding < 0 {
 		padding = 0
 	}
 
+	sep := d.separatorWidth()
 	x := padding
-	for i, item := range d.Items {
+	for i := range d.Items {
 		positions[i] = x
 		w := d.itemWidth(i)
-		x += w + 3 // " │ " separator
-		_ = item
+		x += w + sep
 	}
 	return positions
 }
@@ -122,17 +224,17 @@ func (d *Dock) itemWidth(idx int) int {
 		return 0
 	}
 	item := d.Items[idx]
-	w := runeCount(item.Icon) + 1 + len(item.Label) // "icon label"
+	var w int
+	if d.IconsOnly {
+		w = utf8.RuneCountInString(item.Icon)
+	} else {
+		w = utf8.RuneCountInString(item.Icon) + 1 + utf8.RuneCountInString(item.Label)
+	}
+	if d.IsRunning(idx) {
+		w++ // dot
+	}
 	if idx == d.HoverIndex {
 		w += 2 // brackets
 	}
 	return w
-}
-
-func runeCount(s string) int {
-	n := 0
-	for range s {
-		n++
-	}
-	return n
 }

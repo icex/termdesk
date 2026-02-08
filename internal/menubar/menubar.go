@@ -29,6 +29,8 @@ type MenuBar struct {
 	ShowClock  bool
 	ShowCPU    bool
 	ShowMemory bool
+	CPUPct     float64 // current CPU percentage
+	MemGB      float64 // current memory usage in GB
 }
 
 // New creates a menu bar with default menus.
@@ -36,17 +38,29 @@ func New(width int) *MenuBar {
 	return &MenuBar{
 		Menus: []Menu{
 			{Label: "File", Items: []MenuItem{
-				{Label: "New Terminal", Shortcut: "Ctrl+N", Action: "new_terminal"},
+				{Label: "New Terminal", Shortcut: "n", Action: "new_terminal"},
+				{Label: "Minimize", Shortcut: "m", Action: "minimize"},
+				{Label: "─", Disabled: true},
 				{Label: "Quit", Shortcut: "Ctrl+Q", Action: "quit"},
 			}},
-			{Label: "Edit", Items: []MenuItem{
-				{Label: "Copy", Shortcut: "Ctrl+C", Action: "copy", Disabled: true},
-				{Label: "Paste", Shortcut: "Ctrl+V", Action: "paste", Disabled: true},
+			{Label: "Apps", Items: []MenuItem{
+				{Label: "\uf120 Terminal", Action: "launch_terminal"},
+				{Label: "\ue62b nvim", Action: "launch_nvim"},
+				{Label: "\uf07b Files", Action: "launch_files"},
+				{Label: "\uf1ec Calc", Action: "launch_calc"},
+				{Label: "\uf200 System Monitor", Action: "launch_btop"},
 			}},
 			{Label: "View", Items: []MenuItem{
-				{Label: "Tile All", Shortcut: "Ctrl+T", Action: "tile_all"},
-				{Label: "Snap Left", Shortcut: "Ctrl+←", Action: "snap_left"},
-				{Label: "Snap Right", Shortcut: "Ctrl+→", Action: "snap_right"},
+				{Label: "Tile All", Shortcut: "t", Action: "tile_all"},
+				{Label: "Snap Left", Shortcut: "h", Action: "snap_left"},
+				{Label: "Snap Right", Shortcut: "l", Action: "snap_right"},
+				{Label: "─", Disabled: true},
+				{Label: "Dock: Icons Only", Action: "toggle_icons_only"},
+				{Label: "─", Disabled: true},
+				{Label: "Theme: Retro", Action: "theme_retro"},
+				{Label: "Theme: Modern", Action: "theme_modern"},
+				{Label: "Theme: Tokyo Night", Action: "theme_tokyonight"},
+				{Label: "Theme: Catppuccin", Action: "theme_catppuccin"},
 			}},
 			{Label: "Help", Items: []MenuItem{
 				{Label: "Keybindings", Shortcut: "F1", Action: "help_keys"},
@@ -72,6 +86,14 @@ func (mb *MenuBar) OpenMenu(idx int) {
 	if idx >= 0 && idx < len(mb.Menus) {
 		mb.OpenIndex = idx
 		mb.HoverIndex = 0
+		// Skip to first selectable item
+		items := mb.Menus[idx].Items
+		for mb.HoverIndex < len(items) && items[mb.HoverIndex].Disabled {
+			mb.HoverIndex++
+		}
+		if mb.HoverIndex >= len(items) {
+			mb.HoverIndex = 0
+		}
 	}
 }
 
@@ -86,23 +108,39 @@ func (mb *MenuBar) IsOpen() bool {
 	return mb.OpenIndex >= 0
 }
 
-// MoveHover moves the hover in the open dropdown. Returns new hover index.
+// MoveHover moves the hover in the open dropdown, skipping separators.
+// Returns new hover index.
 func (mb *MenuBar) MoveHover(delta int) int {
 	if mb.OpenIndex < 0 {
 		return -1
 	}
 	items := mb.Menus[mb.OpenIndex].Items
-	if len(items) == 0 {
+	n := len(items)
+	if n == 0 {
 		return -1
 	}
-	mb.HoverIndex += delta
-	if mb.HoverIndex < 0 {
-		mb.HoverIndex = len(items) - 1
-	}
-	if mb.HoverIndex >= len(items) {
-		mb.HoverIndex = 0
+	start := mb.HoverIndex
+	for {
+		mb.HoverIndex += delta
+		if mb.HoverIndex < 0 {
+			mb.HoverIndex = n - 1
+		}
+		if mb.HoverIndex >= n {
+			mb.HoverIndex = 0
+		}
+		if !items[mb.HoverIndex].Disabled {
+			break
+		}
+		if mb.HoverIndex == start {
+			break // all disabled, prevent infinite loop
+		}
 	}
 	return mb.HoverIndex
+}
+
+// isSeparator returns true if the item is a visual separator line.
+func isSeparator(item MenuItem) bool {
+	return item.Disabled && strings.HasPrefix(item.Label, "─")
 }
 
 // MoveMenu moves to adjacent menu (left/right).
@@ -142,7 +180,7 @@ func (mb *MenuBar) MenuXPositions() []int {
 	x := 1
 	for i, m := range mb.Menus {
 		positions[i] = x
-		x += len(m.Label) + 3 // " Label "
+		x += len(m.Label) + 2 // " Label " or "[Label]" = len+2
 	}
 	return positions
 }
@@ -208,10 +246,13 @@ func (mb *MenuBar) RenderDropdown() []string {
 		return nil
 	}
 
-	// Calculate dropdown width
+	// Calculate dropdown width (exclude separators)
 	maxW := 0
 	for _, item := range menu.Items {
-		w := len(item.Label) + 2 // padding
+		if isSeparator(item) {
+			continue
+		}
+		w := len([]rune(item.Label)) + 2
 		if item.Shortcut != "" {
 			w += len(item.Shortcut) + 2
 		}
@@ -222,58 +263,81 @@ func (mb *MenuBar) RenderDropdown() []string {
 	maxW += 2 // borders
 
 	var lines []string
-	// Top border
 	lines = append(lines, "┌"+strings.Repeat("─", maxW-2)+"┐")
 
 	for i, item := range menu.Items {
-		label := item.Label
-		shortcut := item.Shortcut
-		// Pad label to fill
+		// Separator: render as connected horizontal line
+		if isSeparator(item) {
+			lines = append(lines, "├"+strings.Repeat("─", maxW-2)+"┤")
+			continue
+		}
+
 		innerW := maxW - 2
-		content := " " + label
-		if shortcut != "" {
-			gap := innerW - len(content) - len(shortcut) - 1
+		content := " " + item.Label
+		if item.Shortcut != "" {
+			gap := innerW - len([]rune(content)) - len(item.Shortcut) - 1
 			if gap < 1 {
 				gap = 1
 			}
-			content += strings.Repeat(" ", gap) + shortcut
+			content += strings.Repeat(" ", gap) + item.Shortcut
 		}
-		// Pad to inner width
 		for len([]rune(content)) < innerW {
 			content += " "
 		}
 
-		prefix := "│"
-		suffix := "│"
-		if i == mb.HoverIndex {
-			prefix = "│"
-			suffix = "│"
-			// Mark hovered items with > indicator
-			content = ">" + content[1:]
-		}
-		if item.Disabled {
-			// Dim disabled items
-			content = " " + strings.Repeat("·", len(content)-1)
-			content = content[:innerW]
+		if i == mb.HoverIndex && !item.Disabled {
+			runes := []rune(content)
+			runes[0] = '>'
+			content = string(runes)
 		}
 
-		lines = append(lines, prefix+content+suffix)
+		lines = append(lines, "│"+content+"│")
 	}
 
-	// Bottom border
 	lines = append(lines, "└"+strings.Repeat("─", maxW-2)+"┘")
-
 	return lines
+}
+
+// RightSideZone describes a clickable zone on the right side of the menu bar.
+type RightSideZone struct {
+	Start int    // X start position
+	End   int    // X end position (exclusive)
+	Type  string // "cpu", "mem", "clock"
+}
+
+// RightZones returns the clickable zones for the right side of the menu bar.
+func (mb *MenuBar) RightZones(totalWidth int) []RightSideZone {
+	rightStr := mb.renderRight()
+	rightLen := len([]rune(rightStr))
+	startX := totalWidth - rightLen
+
+	var zones []RightSideZone
+	x := startX + 1 // skip leading space
+	if mb.ShowCPU {
+		s := FormatCPU(mb.CPUPct)
+		zones = append(zones, RightSideZone{Start: x, End: x + len(s), Type: "cpu"})
+		x += len(s) + 1 // +1 for space separator
+	}
+	if mb.ShowMemory {
+		s := FormatMemory(mb.MemGB)
+		zones = append(zones, RightSideZone{Start: x, End: x + len(s), Type: "mem"})
+		x += len(s) + 1
+	}
+	if mb.ShowClock {
+		s := time.Now().Format("03:04 PM")
+		zones = append(zones, RightSideZone{Start: x, End: x + len(s), Type: "clock"})
+	}
+	return zones
 }
 
 func (mb *MenuBar) renderRight() string {
 	var parts []string
 
 	if mb.ShowCPU {
-		parts = append(parts, "CPU:--")
+		parts = append(parts, FormatCPU(mb.CPUPct))
 	}
 	if mb.ShowMemory {
-		parts = append(parts, "MEM:--")
+		parts = append(parts, FormatMemory(mb.MemGB))
 	}
 	if mb.ShowClock {
 		parts = append(parts, time.Now().Format("03:04 PM"))
@@ -290,12 +354,45 @@ func ClockString() string {
 	return time.Now().Format("03:04 PM")
 }
 
-// FormatCPU formats a CPU percentage for the menu bar.
+// FormatCPU formats a CPU percentage for the menu bar with tmux-style icons.
 func FormatCPU(pct float64) string {
-	return fmt.Sprintf("CPU:%2.0f%%", pct)
+	icon := "\uf108" // 󰈸 nf-md-desktop-classic (normal)
+	if pct >= 80 {
+		icon = "\uf0e7" //  nf-fa-bolt (high)
+	} else if pct >= 50 {
+		icon = "\uf0e7" //  nf-fa-bolt (medium)
+	}
+	return fmt.Sprintf("%s %2.0f%%", icon, pct)
 }
 
-// FormatMemory formats memory usage for the menu bar.
+// FormatMemory formats memory usage for the menu bar with tmux-style icons.
 func FormatMemory(usedGB float64) string {
-	return fmt.Sprintf("MEM:%.1fG", usedGB)
+	icon := "\uf85a" // 󰡚 nf-md-memory
+	return fmt.Sprintf("%s %.1fG", icon, usedGB)
+}
+
+// CPUColorLevel returns a color level: "green", "yellow", or "red" based on CPU usage.
+func CPUColorLevel(pct float64) string {
+	if pct >= 80 {
+		return "red"
+	}
+	if pct >= 50 {
+		return "yellow"
+	}
+	return "green"
+}
+
+// MemColorLevel returns a color level: "green", "yellow", or "red" based on memory usage percentage.
+func MemColorLevel(usedGB, totalGB float64) string {
+	if totalGB <= 0 {
+		return "green"
+	}
+	pct := usedGB / totalGB * 100
+	if pct >= 80 {
+		return "red"
+	}
+	if pct >= 60 {
+		return "yellow"
+	}
+	return "green"
 }

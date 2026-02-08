@@ -90,7 +90,7 @@ func TestCloseButtonPos(t *testing.T) {
 func TestMaxButtonPos(t *testing.T) {
 	w := NewWindow("w1", "Win", geometry.Rect{X: 0, Y: 0, Width: 40, Height: 20}, nil)
 	got := w.MaxButtonPos()
-	want := geometry.Point{X: 33, Y: 0}
+	want := geometry.Point{X: 30, Y: 0}
 	if got != want {
 		t.Errorf("MaxButtonPos() = %v, want %v", got, want)
 	}

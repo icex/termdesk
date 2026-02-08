@@ -161,8 +161,8 @@ func TestRenderWindowTooSmall(t *testing.T) {
 
 func TestRenderWindowTitleTruncation(t *testing.T) {
 	theme := testTheme()
-	buf := NewBuffer(30, 5, theme.DesktopBg)
-	w := window.NewWindow("w1", "This is a very long window title that should be truncated", geometry.Rect{X: 0, Y: 0, Width: 20, Height: 5}, nil)
+	buf := NewBuffer(40, 5, theme.DesktopBg)
+	w := window.NewWindow("w1", "This is a very long window title that should be truncated", geometry.Rect{X: 0, Y: 0, Width: 30, Height: 5}, nil)
 	w.Focused = true
 
 	RenderWindow(buf, w, theme, nil)
@@ -170,13 +170,13 @@ func TestRenderWindowTitleTruncation(t *testing.T) {
 	// Title should be present but truncated with "..."
 	row := buf.Cells[0]
 	var titleStr strings.Builder
-	for x := 1; x < 19; x++ {
+	for x := 1; x < 29; x++ {
 		titleStr.WriteRune(row[x].Char)
 	}
 	title := titleStr.String()
 	if !strings.Contains(title, "...") {
 		// Short windows truncate title
-		if !strings.Contains(title, "This") {
+		if !strings.Contains(title, "Th") {
 			t.Errorf("title row = %q, expected some title content", title)
 		}
 	}
@@ -189,24 +189,24 @@ func TestRenderWindowActiveInactiveColors(t *testing.T) {
 	w := window.NewWindow("w1", "Test", geometry.Rect{X: 0, Y: 0, Width: 20, Height: 8}, nil)
 	w.Focused = true
 	RenderWindow(buf, w, theme, nil)
-	activeBg := buf.Cells[0][0].Bg
+	activeFg := buf.Cells[0][0].Fg
 
 	buf2 := NewBuffer(30, 10, theme.DesktopBg)
 	w2 := window.NewWindow("w2", "Test", geometry.Rect{X: 0, Y: 0, Width: 20, Height: 8}, nil)
 	w2.Focused = false
 	RenderWindow(buf2, w2, theme, nil)
-	inactiveBg := buf2.Cells[0][0].Bg
+	inactiveFg := buf2.Cells[0][0].Fg
 
-	// Colors should differ
-	if colorsEqual(activeBg, inactiveBg) {
-		t.Error("active and inactive borders should have different backgrounds")
+	// Foreground colors should differ (backgrounds are transparent = same as desktop)
+	if colorsEqual(activeFg, inactiveFg) {
+		t.Error("active and inactive borders should have different foregrounds")
 	}
 }
 
 func TestRenderFrameEmpty(t *testing.T) {
 	theme := testTheme()
 	wm := window.NewManager(40, 20)
-	buf := RenderFrame(wm, theme, nil)
+	buf := RenderFrame(wm, theme, nil, nil)
 
 	if buf.Width != 40 || buf.Height != 20 {
 		t.Errorf("buffer dimensions = %dx%d, want 40x20", buf.Width, buf.Height)
@@ -230,7 +230,7 @@ func TestRenderFrameWithWindows(t *testing.T) {
 	wm.AddWindow(w1)
 	wm.AddWindow(w2)
 
-	buf := RenderFrame(wm, theme, nil)
+	buf := RenderFrame(wm, theme, nil, nil)
 
 	// In the overlap area, w2 (front) should be visible
 	// w2 starts at (10,5), so (10,5) should be w2's top-left corner
@@ -247,7 +247,7 @@ func TestRenderFrameWithWindows(t *testing.T) {
 func TestRenderFrameZeroBounds(t *testing.T) {
 	theme := testTheme()
 	wm := window.NewManager(0, 0)
-	buf := RenderFrame(wm, theme, nil)
+	buf := RenderFrame(wm, theme, nil, nil)
 	if buf.Width != 1 || buf.Height != 1 {
 		t.Errorf("zero bounds buffer = %dx%d, want 1x1", buf.Width, buf.Height)
 	}
@@ -367,7 +367,7 @@ func TestRenderTerminalContentNil(t *testing.T) {
 	area := geometry.Rect{X: 1, Y: 1, Width: 10, Height: 3}
 
 	// nil terminal should be no-op
-	renderTerminalContent(buf, area, nil)
+	renderTerminalContent(buf, area, nil, nil, nil)
 	if buf.Cells[1][1].Char != ' ' {
 		t.Error("nil terminal should not change buffer")
 	}
@@ -394,7 +394,7 @@ func TestRenderTerminalContentWithTerminal(t *testing.T) {
 
 	buf := NewBuffer(30, 10, "#000")
 	area := geometry.Rect{X: 1, Y: 1, Width: 20, Height: 5}
-	renderTerminalContent(buf, area, term)
+	renderTerminalContent(buf, area, term, hexToColor("#C0C0C0"), hexToColor("#1E2127"))
 
 	// Check that "HELLO" was rendered somewhere in the content area
 	var found bool

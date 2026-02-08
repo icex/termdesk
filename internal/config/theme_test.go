@@ -50,15 +50,69 @@ func TestGetThemeModern(t *testing.T) {
 
 func TestGetThemeDefault(t *testing.T) {
 	theme := GetTheme("unknown")
-	if theme.Name != "retro" {
-		t.Errorf("GetTheme(unknown) = %q, want retro fallback", theme.Name)
+	if theme.Name != "modern" {
+		t.Errorf("GetTheme(unknown) = %q, want modern fallback", theme.Name)
+	}
+}
+
+func TestTokyoNightTheme(t *testing.T) {
+	theme := TokyoNightTheme()
+	if theme.Name != "tokyonight" {
+		t.Errorf("Name = %q, want tokyonight", theme.Name)
+	}
+	if theme.BorderTopLeft != '╭' {
+		t.Error("expected rounded borders")
+	}
+}
+
+func TestCatppuccinTheme(t *testing.T) {
+	theme := CatppuccinTheme()
+	if theme.Name != "catppuccin" {
+		t.Errorf("Name = %q, want catppuccin", theme.Name)
+	}
+}
+
+func TestThemeNames(t *testing.T) {
+	names := ThemeNames()
+	if len(names) != 4 {
+		t.Errorf("ThemeNames() returned %d themes, want 4", len(names))
+	}
+	// Verify all theme names resolve
+	for _, name := range names {
+		theme := GetTheme(name)
+		if theme.Name != name {
+			t.Errorf("GetTheme(%q).Name = %q", name, theme.Name)
+		}
+	}
+}
+
+func TestThemeNewFields(t *testing.T) {
+	for _, name := range ThemeNames() {
+		theme := GetTheme(name)
+		if theme.SnapLeftButton == "" {
+			t.Errorf("theme %q: SnapLeftButton is empty", name)
+		}
+		if theme.SnapRightButton == "" {
+			t.Errorf("theme %q: SnapRightButton is empty", name)
+		}
+		if theme.DockAccentBg == "" {
+			t.Errorf("theme %q: DockAccentBg is empty", name)
+		}
+		if theme.ContentBg == "" {
+			t.Errorf("theme %q: ContentBg is empty", name)
+		}
+		if theme.UnfocusedFade <= 0 {
+			t.Errorf("theme %q: UnfocusedFade should be > 0", name)
+		}
 	}
 }
 
 func TestThemeColorsDiffer(t *testing.T) {
 	theme := RetroTheme()
-	if theme.ActiveBorderBg == theme.InactiveBorderBg {
-		t.Error("active and inactive border backgrounds should differ")
+	// With transparent borders, backgrounds match desktop bg;
+	// active vs inactive is distinguished by foreground colors.
+	if theme.ActiveBorderFg == theme.InactiveBorderFg {
+		t.Error("active and inactive border foregrounds should differ")
 	}
 	if theme.ActiveTitleFg == theme.InactiveTitleFg {
 		t.Error("active and inactive title foregrounds should differ")

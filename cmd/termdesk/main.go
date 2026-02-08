@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/charmbracelet/colorprofile"
 	"github.com/icex/termdesk/internal/app"
-	"github.com/icex/termdesk/internal/config"
 	"github.com/icex/termdesk/internal/session"
 
 	tea "charm.land/bubbletea/v2"
@@ -65,15 +65,11 @@ func main() {
 
 // runApp runs the Bubble Tea app directly (used by the server on a slave PTY).
 func runApp() {
-	userCfg := config.LoadUserConfig()
-	theme := config.GetTheme(userCfg.Theme)
-	if bg := theme.DesktopBg; len(bg) == 7 && bg[0] == '#' {
-		fmt.Fprintf(os.Stdout, "\x1b]11;rgb:%s/%s/%s\x07", bg[1:3], bg[3:5], bg[5:7])
-		defer fmt.Fprintf(os.Stdout, "\x1b]111\x07")
-	}
-
 	m := app.New()
-	p := tea.NewProgram(m)
+	// Force TrueColor: colorprofile.Detect() may fail to detect truecolor
+	// outside tmux (missing $COLORTERM, no tmux info to query). All modern
+	// terminals accept RGB SGR sequences even if they internally quantize.
+	p := tea.NewProgram(m, tea.WithColorProfile(colorprofile.TrueColor))
 	m.SetProgram(p)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "termdesk: %v\n", err)

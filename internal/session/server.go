@@ -73,7 +73,7 @@ func NewServer(name string, cols, rows int) (*Server, error) {
 	cmd.Stdin = tty
 	cmd.Stdout = tty
 	cmd.Stderr = tty
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), "COLORTERM=truecolor")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setsid:  true,
 		Setctty: true,

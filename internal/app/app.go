@@ -2108,6 +2108,8 @@ func (m Model) View() tea.View {
 	var v tea.View
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion // CellMotion (1002) is more compatible with Termux than AllMotion (1003)
+	v.BackgroundColor = hexToColor(m.theme.DesktopBg)
+	v.ForegroundColor = hexToColor("#C0C0C0")
 
 	if !m.ready {
 		v.SetContent("Starting termdesk...")

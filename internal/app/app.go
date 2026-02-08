@@ -30,6 +30,14 @@ type programRef struct {
 	p *tea.Program
 }
 
+// renderCache caches the last View() result. Stored as a pointer on Model so
+// it survives BT v2's value-receiver copies (both copies share the same cache).
+type renderCache struct {
+	updateGen uint64   // incremented each Update()
+	viewGen   uint64   // set to updateGen when View() renders
+	view      tea.View // cached result
+}
+
 // Model is the root model for the termdesk application.
 type Model struct {
 	width     int
@@ -59,6 +67,7 @@ type Model struct {
 	cursorVisible bool            // cursor blink state (toggled every 500ms)
 	cursorBlinkAt time.Time       // last cursor blink toggle time
 	scrollOffset  int             // scrollback offset in Copy mode (0 = live)
+	cache         *renderCache    // shared view cache (survives value-receiver copies)
 }
 
 // ConfirmDialog represents a confirmation dialog overlay.
@@ -215,6 +224,7 @@ func New() Model {
 		actionMap:     am,
 		cursorVisible: true,
 		cursorBlinkAt: time.Now(),
+		cache:         &renderCache{updateGen: 1},
 	}
 }
 
@@ -243,6 +253,8 @@ func (m Model) tickSystemStats() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m.cache.updateGen++ // invalidate view cache for this Update cycle
+
 	// Update dock running indicators in Update(), not View().
 	// Calling this in View() mutated shared state (dock is a pointer) on every
 	// render frame, causing dock slice corruption during rapid animations.
@@ -2331,6 +2343,12 @@ func teaToUvButton(b tea.MouseButton) uv.MouseButton {
 }
 
 func (m Model) View() tea.View {
+	// BT v2 calls View() twice per Update(). Return cached result on second call.
+	// cache is a shared pointer — survives value-receiver copies.
+	if m.cache.viewGen == m.cache.updateGen {
+		return m.cache.view
+	}
+
 	var v tea.View
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion // CellMotion (1002) is more compatible with Termux than AllMotion (1003)
@@ -2339,6 +2357,8 @@ func (m Model) View() tea.View {
 
 	if !m.ready {
 		v.SetContent("Starting termdesk...")
+		m.cache.viewGen = m.cache.updateGen
+		m.cache.view = v
 		return v
 	}
 
@@ -2348,6 +2368,9 @@ func (m Model) View() tea.View {
 		RenderMenuBar(buf, m.menuBar, m.theme, m.inputMode, m.prefixPending)
 		RenderDock(buf, m.dock, m.theme, nil)
 		v.SetContent(BufferToString(buf))
+		ReleaseBuffer(buf)
+		m.cache.viewGen = m.cache.updateGen
+		m.cache.view = v
 		return v
 	}
 
@@ -2356,6 +2379,9 @@ func (m Model) View() tea.View {
 		RenderMenuBar(buf, m.menuBar, m.theme, m.inputMode, m.prefixPending)
 		RenderDock(buf, m.dock, m.theme, nil)
 		v.SetContent(BufferToString(buf))
+		ReleaseBuffer(buf)
+		m.cache.viewGen = m.cache.updateGen
+		m.cache.view = v
 		return v
 	}
 
@@ -2394,6 +2420,9 @@ func (m Model) View() tea.View {
 	s := BufferToString(buf)
 	dbg("View: buf=%dx%d ansi=%d wins=%d anims=%d dock=%d",
 		buf.Width, buf.Height, len(s), len(m.wm.Windows()), len(m.animations), len(m.dock.Items))
+	ReleaseBuffer(buf)
 	v.SetContent(s)
+	m.cache.viewGen = m.cache.updateGen
+	m.cache.view = v
 	return v
 }

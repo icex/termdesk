@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	uv "github.com/charmbracelet/ultraviolet"
@@ -20,6 +21,13 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
+// builderPool reuses strings.Builder allocations in BufferToString.
+var builderPool = sync.Pool{
+	New: func() any { return &strings.Builder{} },
+}
+
+// bufferPool reuses Buffer allocations across frames.
+var bufferPool = sync.Pool{}
 
 // runeLen returns the number of runes (display columns) in a string.
 func runeLen(s string) int {
@@ -210,6 +218,55 @@ func NewThemedBuffer(width, height int, theme config.Theme) *Buffer {
 		}
 	}
 	return &Buffer{Width: width, Height: height, Cells: cells}
+}
+
+// AcquireThemedBuffer gets a buffer from the pool or creates a new one.
+// The buffer is filled with the theme's background pattern, ready for rendering.
+func AcquireThemedBuffer(width, height int, theme config.Theme) *Buffer {
+	if v := bufferPool.Get(); v != nil {
+		buf := v.(*Buffer)
+		if buf.Width == width && buf.Height == height {
+			fillThemed(buf, theme)
+			return buf
+		}
+	}
+	return NewThemedBuffer(width, height, theme)
+}
+
+// ReleaseBuffer returns a buffer to the pool for reuse.
+func ReleaseBuffer(buf *Buffer) {
+	bufferPool.Put(buf)
+}
+
+// fillThemed resets all cells in an existing buffer to the theme's background pattern.
+func fillThemed(buf *Buffer, theme config.Theme) {
+	c := theme.C()
+	fg := c.DefaultFg
+	bg := c.DesktopBg
+	if bg == nil {
+		bg = color.RGBA{A: 255}
+	}
+	patChar := theme.DesktopPatternChar
+	patFg := c.DesktopPatternFg
+	if patFg == nil {
+		patFg = fg
+	}
+	for y := range buf.Cells {
+		for x := range buf.Cells[y] {
+			ch := ' '
+			cellFg := fg
+			if patChar != 0 {
+				if patChar == '░' || patChar == '▒' || patChar == '▓' {
+					ch = patChar
+					cellFg = patFg
+				} else if (x+y)%4 == 0 {
+					ch = patChar
+					cellFg = patFg
+				}
+			}
+			buf.Cells[y][x] = Cell{Char: ch, Fg: cellFg, Bg: bg, Width: 1}
+		}
+	}
 }
 
 // RenderWindow draws a single window (border + title bar + content) into the buffer.
@@ -556,10 +613,10 @@ func RenderFrame(wm *window.Manager, theme config.Theme, terminals map[string]*t
 	fullWidth := wa.Width
 	fullHeight := wa.Height + wa.Y + wm.ReservedBottom()
 	if fullWidth <= 0 || fullHeight <= 0 {
-		return NewThemedBuffer(1, 1, theme)
+		return AcquireThemedBuffer(1, 1, theme)
 	}
 
-	buf := NewThemedBuffer(fullWidth, fullHeight, theme)
+	buf := AcquireThemedBuffer(fullWidth, fullHeight, theme)
 
 	// Draw windows back-to-front (painter's algorithm)
 	for _, w := range wm.Windows() {
@@ -1331,10 +1388,10 @@ func RenderExpose(wm *window.Manager, theme config.Theme) *Buffer {
 	fullWidth := wa.Width
 	fullHeight := wa.Height + wa.Y + wm.ReservedBottom()
 	if fullWidth <= 0 || fullHeight <= 0 {
-		return NewThemedBuffer(1, 1, theme)
+		return AcquireThemedBuffer(1, 1, theme)
 	}
 
-	buf := NewThemedBuffer(fullWidth, fullHeight, theme)
+	buf := AcquireThemedBuffer(fullWidth, fullHeight, theme)
 
 	windows := wm.Windows()
 	var visible []*window.Window
@@ -1429,10 +1486,10 @@ func RenderExposeTransition(wm *window.Manager, theme config.Theme, animations [
 	fullWidth := wa.Width
 	fullHeight := wa.Height + wa.Y + wm.ReservedBottom()
 	if fullWidth <= 0 || fullHeight <= 0 {
-		return NewThemedBuffer(1, 1, theme)
+		return AcquireThemedBuffer(1, 1, theme)
 	}
 
-	buf := NewThemedBuffer(fullWidth, fullHeight, theme)
+	buf := AcquireThemedBuffer(fullWidth, fullHeight, theme)
 
 	// Build animation lookup
 	animMap := make(map[string]*Animation)
@@ -1633,7 +1690,8 @@ func colorsEqual(a, b color.Color) bool {
 // Uses targeted SGR sequences instead of full resets to prevent terminal
 // default colors from bleeding through (fixes Termux blue background issue).
 func BufferToString(buf *Buffer) string {
-	var sb strings.Builder
+	sb := builderPool.Get().(*strings.Builder)
+	sb.Reset()
 	sb.Grow(buf.Width * buf.Height * 50) // ~180KB for 120x30: each cell needs ~45 bytes for full ANSI color
 
 	var prevFg, prevBg color.Color
@@ -1673,16 +1731,16 @@ func BufferToString(buf *Buffer) string {
 					if cell.Attrs&AttrStrikethrough != 0 {
 						sb.WriteString(";9")
 					}
-					appendSGRColorFg(&sb, cell.Fg)
-					appendSGRColorBg(&sb, cell.Bg)
+					appendSGRColorFg(sb, cell.Fg)
+					appendSGRColorBg(sb, cell.Bg)
 					sb.WriteByte('m')
 				} else {
 					// Only colors changed — use targeted sequences (no reset)
 					if fgChanged {
-						writeColorFg(&sb, cell.Fg)
+						writeColorFg(sb, cell.Fg)
 					}
 					if bgChanged {
-						writeColorBg(&sb, cell.Bg)
+						writeColorBg(sb, cell.Bg)
 					}
 				}
 				prevFg = cell.Fg
@@ -1699,5 +1757,7 @@ func BufferToString(buf *Buffer) string {
 		}
 	}
 	sb.WriteString("\x1b[0m") // final reset
-	return sb.String()
+	result := sb.String()
+	builderPool.Put(sb)
+	return result
 }

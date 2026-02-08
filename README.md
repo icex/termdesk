@@ -67,7 +67,7 @@ brew install --cask font-jetbrains-mono-nerd-font
 
 ```bash
 # Install dependencies
-pkg install golang neovim htop mc python
+pkg install golang clang neovim htop mc python
 
 # Install a Nerd Font
 curl -fLo ~/.termux/font.ttf \
@@ -87,12 +87,13 @@ cd termdesk
 go build -o bin/termdesk ./cmd/termdesk
 ./bin/termdesk
 
-# Android (Termux) — requires CGO for proper TLS alignment
-CGO_ENABLED=1 go build -o bin/termdesk ./cmd/termdesk
+# Android (Termux) — requires external linker for ARM64 TLS alignment
+pkg install clang  # if not already installed
+CGO_ENABLED=1 go build -ldflags '-linkmode external' -o bin/termdesk ./cmd/termdesk
 ./bin/termdesk
 ```
 
-> **Termux note**: `go run` does not work on Android — it produces an `unexpected e_type: 2` error because Android requires PIE binaries. Use `CGO_ENABLED=1 go build` (the system C linker produces correct TLS alignment for ARM64 Bionic).
+> **Termux note**: `go run` does not work on Android — it produces an `unexpected e_type: 2` error. Android ARM64 requires 64-byte TLS alignment which Go's internal linker doesn't provide. Use `CGO_ENABLED=1` with `-linkmode external` to force the system C linker (`clang`).
 
 ## Quick Start
 

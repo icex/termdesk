@@ -268,16 +268,19 @@ build() {
     # Ensure GOPATH/bin is in PATH for go install dependencies
     export PATH="${HOME}/go/bin:${HOME}/.local/go/bin:/usr/local/go/bin:${PATH}"
 
-    local build_env=""
-    # Android/Termux requires CGO for proper ARM64 TLS alignment and PIE
     if [[ "${OS}" == "termux" ]]; then
-        build_env="CGO_ENABLED=1"
-        info "Termux detected — building with CGO_ENABLED=1 for Android compatibility"
-    fi
-
-    if [[ -n "${build_env}" ]]; then
-        info "Running: ${build_env} ${GO_CMD} build -o bin/termdesk ./cmd/termdesk"
-        env ${build_env} "${GO_CMD}" build -o bin/termdesk ./cmd/termdesk
+        # Android ARM64 requires external linking for proper TLS alignment (64-byte).
+        # Go's internal linker produces 8-byte TLS alignment which Bionic rejects.
+        # CGO_ENABLED=1 + -linkmode external forces the system C linker (clang).
+        if ! command -v cc &>/dev/null && ! command -v clang &>/dev/null; then
+            err "A C compiler is required on Termux for Android compatibility."
+            echo "    pkg install clang"
+            exit 1
+        fi
+        info "Termux detected — building with external linker for Android ARM64 compatibility"
+        local cmd="CGO_ENABLED=1 ${GO_CMD} build -ldflags '-linkmode external' -o bin/termdesk ./cmd/termdesk"
+        info "Running: ${cmd}"
+        CGO_ENABLED=1 "${GO_CMD}" build -ldflags '-linkmode external' -o bin/termdesk ./cmd/termdesk
     else
         info "Running: ${GO_CMD} build -o bin/termdesk ./cmd/termdesk"
         "${GO_CMD}" build -o bin/termdesk ./cmd/termdesk

@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0] - 2026-02-08
+
+### Added
+- **Window rename** (`r` key in Normal mode) with text input dialog
+- **Config persistence**: theme saved to `~/.config/termdesk/config.toml`, restored on launch
+- **Install script** (`install.sh`) for Linux and macOS with Go/font checks
+- Expose: number keys 1-9 select windows directly
+- Expose: selected window is maximized on exit
+- Max windows increased to 9
+
+### Changed
+- Expose focused window shows title (bold centered) instead of number
+- Expose thumbnails show "N: Title" format for easy identification
+- Terminal default background set via OSC 11 for better Termux compatibility
+
 ## [0.9.0] - 2026-02-08
 
 ### Added

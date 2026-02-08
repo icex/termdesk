@@ -27,12 +27,28 @@ A retro terminal desktop environment inspired by Windows 1.0, DESQview, and Mac 
 - A terminal emulator with truecolor and mouse support
 - Nerd Font installed (for dock and UI icons)
 
+## Install
+
+```bash
+./install.sh    # Builds and installs to ~/.local/bin/
+```
+
 ## Quick Start
 
 ```bash
 make build
 ./bin/termdesk
 ```
+
+## Configuration
+
+Settings are saved to `~/.config/termdesk/config.toml`:
+
+```toml
+theme = "modern"    # retro, modern, tokyonight, catppuccin
+```
+
+Theme changes via the View menu are persisted automatically.
 
 ## Development
 
@@ -59,6 +75,7 @@ make run            # Build and run
 | `Ctrl+Up` | Maximize window |
 | `Ctrl+Down` | Restore window |
 | `Ctrl+T` | Tile all windows |
+| `R` | Rename focused window |
 | `Q` | Quit (in Normal mode, no window focused) |
 | `F1` | Help overlay |
 | `F10` | Toggle menu bar |
@@ -76,7 +93,8 @@ make run            # Build and run
 | Key | Action |
 |-----|--------|
 | `Tab` / `Arrow keys` | Cycle through windows |
-| `Enter` | Select focused window and exit |
+| `1`-`9` | Select window by number |
+| `Enter` | Select focused window (maximizes it) |
 | `Escape` | Exit expose |
 
 ## Mouse Support

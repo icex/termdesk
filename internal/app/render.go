@@ -708,6 +708,104 @@ func RenderConfirmDialog(buf *Buffer, dialog *ConfirmDialog, theme config.Theme)
 	buf.Set(startX+boxW-1, startY+5, theme.BorderBottomRight, fg, bg)
 }
 
+// RenderRenameDialog draws a text input dialog for renaming a window.
+func RenderRenameDialog(buf *Buffer, dialog *RenameDialog, theme config.Theme) {
+	if dialog == nil {
+		return
+	}
+
+	title := "Rename Window"
+	inputW := 30
+	boxW := inputW + 4
+	if boxW < runeLen(title)+4 {
+		boxW = runeLen(title) + 4
+	}
+	boxH := 6
+
+	startX := (buf.Width - boxW) / 2
+	startY := (buf.Height - boxH) / 2
+	if startX < 0 {
+		startX = 0
+	}
+	if startY < 0 {
+		startY = 0
+	}
+
+	fg := theme.ActiveTitleFg
+	bg := theme.ActiveBorderBg
+	titleBg := theme.ActiveTitleBg
+
+	// Top border
+	buf.Set(startX, startY, theme.BorderTopLeft, fg, titleBg)
+	for x := 1; x < boxW-1; x++ {
+		buf.Set(startX+x, startY, theme.BorderHorizontal, fg, titleBg)
+	}
+	buf.Set(startX+boxW-1, startY, theme.BorderTopRight, fg, titleBg)
+
+	// Title row
+	buf.Set(startX, startY+1, theme.BorderVertical, fg, titleBg)
+	for x := 1; x < boxW-1; x++ {
+		buf.Set(startX+x, startY+1, ' ', fg, titleBg)
+	}
+	titleX := startX + (boxW-runeLen(title))/2
+	buf.SetString(titleX, startY+1, title, fg, titleBg)
+	buf.Set(startX+boxW-1, startY+1, theme.BorderVertical, fg, titleBg)
+
+	// Separator
+	buf.Set(startX, startY+2, theme.BorderVertical, fg, bg)
+	for x := 1; x < boxW-1; x++ {
+		buf.Set(startX+x, startY+2, theme.BorderHorizontal, fg, bg)
+	}
+	buf.Set(startX+boxW-1, startY+2, theme.BorderVertical, fg, bg)
+
+	// Input row
+	inputFieldW := boxW - 4
+	buf.Set(startX, startY+3, theme.BorderVertical, fg, bg)
+	for x := 1; x < boxW-1; x++ {
+		buf.Set(startX+x, startY+3, ' ', fg, bg)
+	}
+	inputX := startX + 2
+	// Draw text with cursor
+	text := dialog.Text
+	// Visible window of text
+	visStart := 0
+	if dialog.Cursor > inputFieldW-1 {
+		visStart = dialog.Cursor - inputFieldW + 1
+	}
+	for i := 0; i < inputFieldW; i++ {
+		idx := visStart + i
+		ch := ' '
+		if idx < len(text) {
+			ch = text[idx]
+		}
+		cellFg := fg
+		cellBg := bg
+		if idx == dialog.Cursor {
+			cellFg = bg
+			cellBg = fg // invert for cursor
+		}
+		buf.Set(inputX+i, startY+3, ch, cellFg, cellBg)
+	}
+	buf.Set(startX+boxW-1, startY+3, theme.BorderVertical, fg, bg)
+
+	// Hint row
+	hint := "Enter=OK  Esc=Cancel"
+	buf.Set(startX, startY+4, theme.BorderVertical, fg, bg)
+	for x := 1; x < boxW-1; x++ {
+		buf.Set(startX+x, startY+4, ' ', fg, bg)
+	}
+	hintX := startX + (boxW-runeLen(hint))/2
+	buf.SetString(hintX, startY+4, hint, fg, bg)
+	buf.Set(startX+boxW-1, startY+4, theme.BorderVertical, fg, bg)
+
+	// Bottom border
+	buf.Set(startX, startY+5, theme.BorderBottomLeft, fg, bg)
+	for x := 1; x < boxW-1; x++ {
+		buf.Set(startX+x, startY+5, theme.BorderHorizontal, fg, bg)
+	}
+	buf.Set(startX+boxW-1, startY+5, theme.BorderBottomRight, fg, bg)
+}
+
 // RenderModal draws a scrollable modal overlay centered on the buffer.
 func RenderModal(buf *Buffer, modal *ModalOverlay, theme config.Theme) {
 	if modal == nil {
@@ -858,22 +956,11 @@ func renderExposeMiniWindow(buf *Buffer, theme config.Theme, w *window.Window, x
 	fgColor := hexToColor(titleFg)
 	bgColor := hexToColor(contentBg)
 
-	// Render big number (1-8) centered in the window
-	numStr := fmt.Sprintf("%d", winNum)
-	numW := bigTextWidth(numStr)
-	if numW <= innerW && innerH >= bigOutRows {
-		numX := x + 1 + (innerW-numW)/2
-		numY := y + 1 + (innerH-bigOutRows-1)/2 // above center to leave room for title
-		if numY < y+1 {
-			numY = y + 1
-		}
-		renderBigText(buf, numX, numY, numStr, fgColor, bgColor)
-	}
-
-	// Render title as normal text below the number
 	title := w.Title
-	if title != "" {
-		titleRunes := []rune(title)
+	titleRunes := []rune(title)
+
+	if focused {
+		// Focused window: show title centered (no number)
 		if len(titleRunes) > innerW {
 			if innerW > 3 {
 				title = string(titleRunes[:innerW-3]) + "..."
@@ -885,16 +972,39 @@ func renderExposeMiniWindow(buf *Buffer, theme config.Theme, w *window.Window, x
 		}
 		if title != "" {
 			titleX := x + 1 + (innerW-runeLen(title))/2
-			titleY := y + mh - 2 // one row above bottom border
-			if titleY > y+1+bigOutRows { // only if there's room below the number
-				col := 0
-				for _, ch := range title {
-					bx := titleX + col
-					if bx >= 0 && bx < buf.Width && titleY >= 0 && titleY < buf.Height {
-						buf.Cells[titleY][bx] = Cell{Char: ch, Fg: fgColor, Bg: bgColor}
-					}
-					col++
+			titleY := y + 1 + innerH/2
+			col := 0
+			for _, ch := range title {
+				bx := titleX + col
+				if bx >= 0 && bx < buf.Width && titleY >= 0 && titleY < buf.Height {
+					buf.Cells[titleY][bx] = Cell{Char: ch, Fg: fgColor, Bg: bgColor, Attrs: AttrBold}
 				}
+				col++
+			}
+		}
+	} else {
+		// Unfocused thumbnail: show "N: Title" centered
+		label := fmt.Sprintf("%d: %s", winNum, title)
+		labelRunes := []rune(label)
+		if len(labelRunes) > innerW {
+			if innerW > 3 {
+				label = string(labelRunes[:innerW-3]) + "..."
+			} else if innerW > 0 {
+				label = string(labelRunes[:innerW])
+			} else {
+				label = ""
+			}
+		}
+		if label != "" {
+			lx := x + 1 + (innerW-runeLen(label))/2
+			ly := y + 1 + innerH/2
+			col := 0
+			for _, ch := range label {
+				bx := lx + col
+				if bx >= 0 && bx < buf.Width && ly >= 0 && ly < buf.Height {
+					buf.Cells[ly][bx] = Cell{Char: ch, Fg: fgColor, Bg: bgColor}
+				}
+				col++
 			}
 		}
 	}

@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -46,6 +47,7 @@ type Model struct {
 	inputMode    InputMode   // current input mode (Normal/Terminal/Copy)
 	dockFocused  bool        // true when dock has keyboard focus in Normal mode
 	confirmClose *ConfirmDialog
+	renameDialog *RenameDialog
 	cpuPct       float64
 	memUsedGB    float64
 	animations   []Animation     // active animations
@@ -58,6 +60,13 @@ type ConfirmDialog struct {
 	Title    string
 	IsQuit   bool // true = quit application, false = close window
 	Selected int  // 0 = Yes, 1 = No
+}
+
+// RenameDialog represents a text input dialog for renaming a window.
+type RenameDialog struct {
+	WindowID string
+	Text     []rune
+	Cursor   int
 }
 
 // ModalOverlay represents a modal text overlay (help, about, etc.)
@@ -111,9 +120,11 @@ type SystemStatsMsg struct {
 
 // New creates a new root Model.
 func New() Model {
+	userCfg := config.LoadUserConfig()
+	theme := config.GetTheme(userCfg.Theme)
 	return Model{
 		wm:        window.NewManager(80, 24),
-		theme:     config.ModernTheme(),
+		theme:     theme,
 		terminals: make(map[string]*terminal.Terminal),
 		menuBar:   menubar.New(80),
 		dock:      dock.New(80),
@@ -254,6 +265,56 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.renameDialog != nil {
+		switch key {
+		case "enter":
+			if w := m.wm.WindowByID(m.renameDialog.WindowID); w != nil {
+				newTitle := string(m.renameDialog.Text)
+				if newTitle != "" {
+					w.Title = newTitle
+				}
+			}
+			m.renameDialog = nil
+		case "esc", "escape":
+			m.renameDialog = nil
+		case "backspace":
+			if m.renameDialog.Cursor > 0 {
+				m.renameDialog.Text = append(m.renameDialog.Text[:m.renameDialog.Cursor-1], m.renameDialog.Text[m.renameDialog.Cursor:]...)
+				m.renameDialog.Cursor--
+			}
+		case "delete":
+			if m.renameDialog.Cursor < len(m.renameDialog.Text) {
+				m.renameDialog.Text = append(m.renameDialog.Text[:m.renameDialog.Cursor], m.renameDialog.Text[m.renameDialog.Cursor+1:]...)
+			}
+		case "left":
+			if m.renameDialog.Cursor > 0 {
+				m.renameDialog.Cursor--
+			}
+		case "right":
+			if m.renameDialog.Cursor < len(m.renameDialog.Text) {
+				m.renameDialog.Cursor++
+			}
+		case "home", "ctrl+a":
+			m.renameDialog.Cursor = 0
+		case "end", "ctrl+e":
+			m.renameDialog.Cursor = len(m.renameDialog.Text)
+		case "ctrl+u":
+			m.renameDialog.Text = m.renameDialog.Text[m.renameDialog.Cursor:]
+			m.renameDialog.Cursor = 0
+		default:
+			k := tea.Key(msg)
+			if k.Text != "" {
+				for _, ch := range k.Text {
+					m.renameDialog.Text = append(m.renameDialog.Text, 0)
+					copy(m.renameDialog.Text[m.renameDialog.Cursor+1:], m.renameDialog.Text[m.renameDialog.Cursor:])
+					m.renameDialog.Text[m.renameDialog.Cursor] = ch
+					m.renameDialog.Cursor++
+				}
+			}
+		}
+		return m, nil
+	}
+
 	if m.exposeMode {
 		switch key {
 		case "esc", "escape":
@@ -267,12 +328,14 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.cycleExposeWindow(-1)
 			return m, tickAnimation()
 		case "enter":
+			m.maximizeFocusedWindow()
 			m.exitExpose()
 			m.inputMode = ModeNormal
 			return m, tickAnimation()
-		case "1", "2", "3", "4", "5", "6", "7", "8":
+		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 			idx := int(key[0] - '1') // 0-based
 			m.selectExposeByIndex(idx)
+			m.maximizeFocusedWindow()
 			m.exitExpose()
 			m.inputMode = ModeNormal
 			return m, tickAnimation()
@@ -397,6 +460,18 @@ func (m Model) handleNormalModeKey(msg tea.KeyPressMsg, key string) (tea.Model, 
 			m.confirmClose = &ConfirmDialog{
 				WindowID: fw.ID,
 				Title:    fmt.Sprintf("Close \"%s\"?", fw.Title),
+			}
+		}
+		return m, nil
+
+	// Rename window
+	case "r":
+		if fw := m.wm.FocusedWindow(); fw != nil {
+			text := []rune(fw.Title)
+			m.renameDialog = &RenameDialog{
+				WindowID: fw.ID,
+				Text:     text,
+				Cursor:   len(text),
 			}
 		}
 		return m, nil
@@ -695,6 +770,14 @@ func (m Model) executeMenuAction(action string) (tea.Model, tea.Cmd) {
 	case "theme_retro", "theme_modern", "theme_tokyonight", "theme_catppuccin":
 		name := action[6:] // strip "theme_" prefix
 		m.theme = config.GetTheme(name)
+		// Update terminal default background for new theme (Termux fix)
+		if bg := m.theme.DesktopBg; len(bg) == 7 && bg[0] == '#' {
+			fmt.Fprintf(os.Stdout, "\x1b]11;rgb:%s/%s/%s\x07", bg[1:3], bg[3:5], bg[5:7])
+		}
+		// Persist theme choice
+		cfg := config.LoadUserConfig()
+		cfg.Theme = name
+		config.SaveUserConfig(cfg)
 	}
 	return m, nil
 }
@@ -752,10 +835,11 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// If exposé mode, click selects a window
+	// If exposé mode, click selects a window and maximizes it
 	if m.exposeMode {
 		if mouse.Y != m.height-1 && mouse.Y != 0 { // not dock or menubar
 			m.selectExposeWindow(mouse.X, mouse.Y)
+			m.maximizeFocusedWindow()
 			m.exitExpose()
 			m.inputMode = ModeNormal
 		}
@@ -1054,7 +1138,7 @@ func (m *Model) openTerminalWindow() tea.Cmd {
 	return m.openTerminalWindowWith("", nil)
 }
 
-const maxWindows = 8
+const maxWindows = 9
 
 // openTerminalWindowWith creates a new window running the specified command.
 // If command is empty, it launches the default shell.
@@ -1484,6 +1568,16 @@ func (m *Model) selectExposeByIndex(idx int) {
 	}
 }
 
+// maximizeFocusedWindow maximizes the currently focused window.
+func (m *Model) maximizeFocusedWindow() {
+	if fw := m.wm.FocusedWindow(); fw != nil && !fw.IsMaximized() {
+		from := fw.Rect
+		window.Maximize(fw, m.wm.WorkArea())
+		m.startWindowAnimation(fw.ID, AnimMaximize, from, fw.Rect)
+		m.resizeTerminalForWindow(fw)
+	}
+}
+
 // closeTerminal closes and removes a terminal by window ID.
 func (m *Model) closeTerminal(windowID string) {
 	if term, ok := m.terminals[windowID]; ok {
@@ -1570,6 +1664,7 @@ func (m *Model) helpOverlay() *ModalOverlay {
 			"  n / Ctrl+N    New Terminal",
 			"  w / Ctrl+W    Close Window",
 			"  m             Minimize to Dock",
+			"  r             Rename Window",
 			"  d             Navigate Dock",
 			"  Space/Ctrl+Sp Launcher",
 			"  Tab           Next Window",
@@ -1826,6 +1921,9 @@ func (m Model) View() tea.View {
 	}
 	if m.modal != nil {
 		RenderModal(buf, m.modal, m.theme)
+	}
+	if m.renameDialog != nil {
+		RenderRenameDialog(buf, m.renameDialog, m.theme)
 	}
 	v.SetContent(BufferToString(buf))
 	return v

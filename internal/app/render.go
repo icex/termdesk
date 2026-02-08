@@ -441,6 +441,8 @@ func RenderMenuBar(buf *Buffer, mb *menubar.MenuBar, theme config.Theme, mode In
 		case "mem":
 			_, totalGB := menubar.ReadMemoryInfo()
 			colorHex = levelColor(menubar.MemColorLevel(mb.MemGB, totalGB))
+		case "bat":
+			colorHex = levelColor(menubar.BatColorLevel(mb.BatPct))
 		}
 		if colorHex != "" {
 			for x := zone.Start; x < zone.End && x < buf.Width; x++ {
@@ -556,6 +558,9 @@ func RenderDock(buf *Buffer, d *dock.Dock, theme config.Theme, animations []Anim
 		}
 		fg := theme.DockFg
 		bg := theme.DockBg
+		if cell.IconColor != "" {
+			fg = cell.IconColor // colorful icon
+		}
 		if cell.Minimized {
 			fg = theme.NotificationFg // distinct color for minimized items
 			if fg == "" {

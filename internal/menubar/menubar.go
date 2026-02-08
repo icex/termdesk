@@ -26,11 +26,16 @@ type MenuBar struct {
 	OpenIndex  int  // -1 = no menu open
 	HoverIndex int  // highlighted item in open menu, -1 = none
 	Width      int  // total width available
-	ShowClock  bool
-	ShowCPU    bool
-	ShowMemory bool
-	CPUPct     float64 // current CPU percentage
-	MemGB      float64 // current memory usage in GB
+	ShowClock   bool
+	ShowCPU     bool
+	ShowMemory  bool
+	ShowBattery bool
+	CPUPct      float64 // current CPU percentage
+	MemGB       float64 // current memory usage in GB
+	BatPct      float64 // battery percentage
+	BatCharging bool    // battery is charging
+	BatPresent  bool    // battery exists on this system
+	Username    string  // logged-in username
 }
 
 // New creates a menu bar with default menus.
@@ -70,9 +75,10 @@ func New(width int) *MenuBar {
 		OpenIndex:  -1,
 		HoverIndex: -1,
 		Width:      width,
-		ShowClock:  true,
-		ShowCPU:    true,
-		ShowMemory: true,
+		ShowClock:   true,
+		ShowCPU:     true,
+		ShowMemory:  true,
+		ShowBattery: true,
 	}
 }
 
@@ -315,17 +321,26 @@ func (mb *MenuBar) RightZones(totalWidth int) []RightSideZone {
 	x := startX + 1 // skip leading space
 	if mb.ShowCPU {
 		s := FormatCPU(mb.CPUPct)
-		zones = append(zones, RightSideZone{Start: x, End: x + len(s), Type: "cpu"})
-		x += len(s) + 1 // +1 for space separator
+		w := len([]rune(s))
+		zones = append(zones, RightSideZone{Start: x, End: x + w, Type: "cpu"})
+		x += w + 1 // +1 for space separator
 	}
 	if mb.ShowMemory {
 		s := FormatMemory(mb.MemGB)
-		zones = append(zones, RightSideZone{Start: x, End: x + len(s), Type: "mem"})
-		x += len(s) + 1
+		w := len([]rune(s))
+		zones = append(zones, RightSideZone{Start: x, End: x + w, Type: "mem"})
+		x += w + 1
+	}
+	if mb.ShowBattery && mb.BatPresent {
+		s := FormatBattery(mb.BatPct, mb.BatCharging)
+		w := len([]rune(s))
+		zones = append(zones, RightSideZone{Start: x, End: x + w, Type: "bat"})
+		x += w + 1
 	}
 	if mb.ShowClock {
 		s := time.Now().Format("03:04 PM")
-		zones = append(zones, RightSideZone{Start: x, End: x + len(s), Type: "clock"})
+		w := len([]rune(s))
+		zones = append(zones, RightSideZone{Start: x, End: x + w, Type: "clock"})
 	}
 	return zones
 }
@@ -339,8 +354,14 @@ func (mb *MenuBar) renderRight() string {
 	if mb.ShowMemory {
 		parts = append(parts, FormatMemory(mb.MemGB))
 	}
+	if mb.ShowBattery && mb.BatPresent {
+		parts = append(parts, FormatBattery(mb.BatPct, mb.BatCharging))
+	}
 	if mb.ShowClock {
 		parts = append(parts, time.Now().Format("03:04 PM"))
+	}
+	if mb.Username != "" {
+		parts = append(parts, "\uf007 "+mb.Username) //  user icon
 	}
 
 	if len(parts) == 0 {
@@ -369,6 +390,36 @@ func FormatCPU(pct float64) string {
 func FormatMemory(usedGB float64) string {
 	icon := "\uf85a" // 󰡚 nf-md-memory
 	return fmt.Sprintf("%s %.1fG", icon, usedGB)
+}
+
+// FormatBattery formats battery status for the menu bar.
+func FormatBattery(pct float64, charging bool) string {
+	icon := "\uf244" //  nf-fa-battery_empty
+	if pct >= 80 {
+		icon = "\uf240" //  nf-fa-battery_full
+	} else if pct >= 60 {
+		icon = "\uf241" //  nf-fa-battery_three_quarters
+	} else if pct >= 40 {
+		icon = "\uf242" //  nf-fa-battery_half
+	} else if pct >= 20 {
+		icon = "\uf243" //  nf-fa-battery_quarter
+	}
+	charge := ""
+	if charging {
+		charge = "\u26a1" // ⚡
+	}
+	return fmt.Sprintf("%s %.0f%%%s", icon, pct, charge)
+}
+
+// BatColorLevel returns a color level: "green", "yellow", or "red" based on battery percentage.
+func BatColorLevel(pct float64) string {
+	if pct >= 50 {
+		return "green"
+	}
+	if pct >= 20 {
+		return "yellow"
+	}
+	return "red"
 }
 
 // CPUColorLevel returns a color level: "green", "yellow", or "red" based on CPU usage.

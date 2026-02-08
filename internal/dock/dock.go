@@ -7,22 +7,24 @@ import (
 
 // DockItem represents a launchable app in the dock.
 type DockItem struct {
-	Icon     string // Nerd Font icon
-	Label    string
-	Command  string
-	Args     []string
-	Special  string // "launcher", "expose", "minimized", or "" for normal items
-	WindowID string // window ID for minimized items
+	Icon      string // Nerd Font icon
+	IconColor string // hex color for the icon (e.g. "#98C379"), "" = default
+	Label     string
+	Command   string
+	Args      []string
+	Special   string // "launcher", "expose", "minimized", or "" for normal items
+	WindowID  string // window ID for minimized items
 }
 
 // DockCell represents a single cell in the dock render output with styling info.
 type DockCell struct {
 	Char      rune
-	Accent    bool // true = use accent color (hovered item)
-	Special   bool // true = use a distinct style (launcher/expose buttons)
-	Minimized bool // true = minimized window item
-	Indicator bool // true = running indicator dot
-	Pulse     bool // true = dock launch pulse animation active
+	Accent    bool   // true = use accent color (hovered item)
+	Special   bool   // true = use a distinct style (launcher/expose buttons)
+	Minimized bool   // true = minimized window item
+	Indicator bool   // true = running indicator dot
+	Pulse     bool   // true = dock launch pulse animation active
+	IconColor string // hex color for icon characters, "" = default
 }
 
 // Dock represents the bottom dock bar.
@@ -38,12 +40,12 @@ type Dock struct {
 func New(width int) *Dock {
 	return &Dock{
 		Items: []DockItem{
-			{Icon: "\uf135", Label: "Launch", Special: "launcher"},
-			{Icon: "\uf120", Label: "Terminal", Command: "$SHELL"},
-			{Icon: "\ue62b", Label: "nvim", Command: "nvim"},
-			{Icon: "\uf07b", Label: "Files", Command: "spf"},
-			{Icon: "\uf1ec", Label: "Calc", Command: "python3"},
-			{Icon: "\uf26c", Label: "Expose\u0301", Special: "expose"},
+			{Icon: "\uf135", IconColor: "#56B6C2", Label: "Launch", Special: "launcher"},   // cyan
+			{Icon: "\uf120", IconColor: "#98C379", Label: "Terminal", Command: "$SHELL"},    // green
+			{Icon: "\ue62b", IconColor: "#61AFEF", Label: "nvim", Command: "nvim"},          // blue
+			{Icon: "\uf07b", IconColor: "#E5C07B", Label: "Files", Command: "spf"},          // yellow
+			{Icon: "\uf1ec", IconColor: "#D19A66", Label: "Calc", Command: "python3"},       // orange
+			{Icon: "\uf26c", IconColor: "#C678DD", Label: "Expose\u0301", Special: "expose"}, // purple
 		},
 		Width:           width,
 		HoverIndex:      -1,
@@ -140,6 +142,12 @@ func (d *Dock) RenderCells(width int) []DockCell {
 		x += iw + sep
 	}
 
+	// Compute icon width for each item (to colorize icon chars)
+	iconWidths := make([]int, len(d.Items))
+	for i, item := range d.Items {
+		iconWidths[i] = utf8.RuneCountInString(item.Icon)
+	}
+
 	// Fill cells
 	col := 0
 	for _, ch := range d.Render(width) {
@@ -157,6 +165,15 @@ func (d *Dock) RenderCells(width int) []DockCell {
 					cell.Minimized = true
 				} else if item.Special != "" {
 					cell.Special = true
+				}
+				// Determine if this cell is part of the icon
+				localX := col - span.start
+				bracketOffset := 0
+				if span.index == d.HoverIndex {
+					bracketOffset = 1 // skip leading '['
+				}
+				if localX >= bracketOffset && localX < bracketOffset+iconWidths[span.index] {
+					cell.IconColor = item.IconColor
 				}
 				break
 			}

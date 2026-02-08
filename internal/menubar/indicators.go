@@ -65,3 +65,46 @@ func ReadMemoryInfo() (usedGB, totalGB float64) {
 	usedKB := memTotal - memAvailable
 	return usedKB / 1024 / 1024, memTotal / 1024 / 1024
 }
+
+// BatteryInfo holds battery status.
+type BatteryInfo struct {
+	Percent  float64
+	Charging bool
+	Present  bool
+}
+
+// ReadBattery reads battery status from /sys/class/power_supply/.
+// Discovers batteries dynamically — works on Linux (BAT0, BAT1, ...),
+// Android/Termux (battery), and any other naming convention.
+func ReadBattery() BatteryInfo {
+	entries, err := os.ReadDir("/sys/class/power_supply")
+	if err != nil {
+		return BatteryInfo{}
+	}
+	for _, entry := range entries {
+		base := "/sys/class/power_supply/" + entry.Name()
+		// Check if this is a battery (type file contains "Battery")
+		typeData, err := os.ReadFile(base + "/type")
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(typeData)) != "Battery" {
+			continue
+		}
+		capData, err := os.ReadFile(base + "/capacity")
+		if err != nil {
+			continue
+		}
+		pct, err := strconv.ParseFloat(strings.TrimSpace(string(capData)), 64)
+		if err != nil {
+			continue
+		}
+		charging := false
+		if statusData, err := os.ReadFile(base + "/status"); err == nil {
+			s := strings.TrimSpace(string(statusData))
+			charging = s == "Charging" || s == "Full"
+		}
+		return BatteryInfo{Percent: pct, Charging: charging, Present: true}
+	}
+	return BatteryInfo{}
+}

@@ -114,20 +114,30 @@ func (m *Model) cycleInputMode() {
 
 // SystemStatsMsg carries updated system statistics.
 type SystemStatsMsg struct {
-	CPU   float64
-	MemGB float64
+	CPU         float64
+	MemGB       float64
+	BatPct      float64
+	BatCharging bool
+	BatPresent  bool
 }
 
 // New creates a new root Model.
 func New() Model {
 	userCfg := config.LoadUserConfig()
 	theme := config.GetTheme(userCfg.Theme)
+	mb := menubar.New(80)
+	mb.Username = os.Getenv("USER")
+	if mb.Username == "" {
+		mb.Username = os.Getenv("LOGNAME")
+	}
+	d := dock.New(80)
+	d.IconsOnly = userCfg.IconsOnly
 	return Model{
 		wm:        window.NewManager(80, 24),
 		theme:     theme,
 		terminals: make(map[string]*terminal.Terminal),
-		menuBar:   menubar.New(80),
-		dock:      dock.New(80),
+		menuBar:   mb,
+		dock:      d,
 		launcher:  launcher.New(),
 		progRef:   &programRef{},
 	}
@@ -146,9 +156,13 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) tickSystemStats() tea.Cmd {
 	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+		bat := menubar.ReadBattery()
 		return SystemStatsMsg{
-			CPU:   menubar.ReadCPUPercent(),
-			MemGB: menubar.ReadMemoryGB(),
+			CPU:         menubar.ReadCPUPercent(),
+			MemGB:       menubar.ReadMemoryGB(),
+			BatPct:      bat.Percent,
+			BatCharging: bat.Charging,
+			BatPresent:  bat.Present,
 		}
 	})
 }
@@ -195,6 +209,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.memUsedGB = msg.MemGB
 		m.menuBar.CPUPct = msg.CPU
 		m.menuBar.MemGB = msg.MemGB
+		m.menuBar.BatPct = msg.BatPct
+		m.menuBar.BatCharging = msg.BatCharging
+		m.menuBar.BatPresent = msg.BatPresent
 		return m, m.tickSystemStats()
 
 	case AnimationTickMsg:
@@ -748,6 +765,9 @@ func (m Model) executeMenuAction(action string) (tea.Model, tea.Cmd) {
 		}
 	case "toggle_icons_only":
 		m.dock.IconsOnly = !m.dock.IconsOnly
+		cfg := config.LoadUserConfig()
+		cfg.IconsOnly = m.dock.IconsOnly
+		config.SaveUserConfig(cfg)
 	case "help_keys":
 		m.modal = m.helpOverlay()
 	case "about":

@@ -8,13 +8,15 @@ import (
 
 // UserConfig holds persistent user settings.
 type UserConfig struct {
-	Theme string `toml:"theme"`
+	Theme     string `toml:"theme"`
+	IconsOnly bool   `toml:"icons_only"`
 }
 
 // DefaultUserConfig returns the default user configuration.
 func DefaultUserConfig() UserConfig {
 	return UserConfig{
-		Theme: "modern",
+		Theme:     "modern",
+		IconsOnly: false,
 	}
 }
 
@@ -66,6 +68,8 @@ func LoadUserConfig() UserConfig {
 		switch key {
 		case "theme":
 			cfg.Theme = val
+		case "icons_only":
+			cfg.IconsOnly = val == "true"
 		}
 	}
 
@@ -88,6 +92,11 @@ func SaveUserConfig(cfg UserConfig) error {
 	sb.WriteString("theme = \"")
 	sb.WriteString(cfg.Theme)
 	sb.WriteString("\"\n")
+	if cfg.IconsOnly {
+		sb.WriteString("icons_only = true\n")
+	} else {
+		sb.WriteString("icons_only = false\n")
+	}
 
 	return os.WriteFile(configPath(), []byte(sb.String()), 0o644)
 }

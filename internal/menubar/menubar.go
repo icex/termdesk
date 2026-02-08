@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/icex/termdesk/internal/config"
 )
 
 // MenuItem represents a single item in a dropdown menu.
@@ -39,13 +41,13 @@ type MenuBar struct {
 	Username    string  // logged-in username
 }
 
-// New creates a menu bar with default menus.
-func New(width int) *MenuBar {
+// New creates a menu bar with default menus. Shortcuts reflect the user's keybindings.
+func New(width int, kb config.KeyBindings) *MenuBar {
 	return &MenuBar{
 		Menus: []Menu{
 			{Label: "File", Items: []MenuItem{
-				{Label: "New Terminal", Shortcut: "n", Action: "new_terminal"},
-				{Label: "Minimize", Shortcut: "m", Action: "minimize"},
+				{Label: "New Terminal", Shortcut: kb.NewTerminal, Action: "new_terminal"},
+				{Label: "Minimize", Shortcut: kb.Minimize, Action: "minimize"},
 				{Label: "─", Disabled: true},
 				{Label: "Detach", Shortcut: "Pfx+d", Action: "detach"},
 				{Label: "Quit", Shortcut: "Ctrl+Q", Action: "quit"},
@@ -58,9 +60,9 @@ func New(width int) *MenuBar {
 				{Label: "\uf200 System Monitor", Action: "launch_htop"},
 			}},
 			{Label: "View", Items: []MenuItem{
-				{Label: "Tile All", Shortcut: "t", Action: "tile_all"},
-				{Label: "Snap Left", Shortcut: "h", Action: "snap_left"},
-				{Label: "Snap Right", Shortcut: "l", Action: "snap_right"},
+				{Label: "Tile All", Shortcut: kb.TileAll, Action: "tile_all"},
+				{Label: "Snap Left", Shortcut: kb.SnapLeft, Action: "snap_left"},
+				{Label: "Snap Right", Shortcut: kb.SnapRight, Action: "snap_right"},
 				{Label: "─", Disabled: true},
 				{Label: "Dock: Icons Only", Action: "toggle_icons_only"},
 				{Label: "─", Disabled: true},
@@ -70,7 +72,7 @@ func New(width int) *MenuBar {
 				{Label: "Theme: Catppuccin", Action: "theme_catppuccin"},
 			}},
 			{Label: "Help", Items: []MenuItem{
-				{Label: "Keybindings", Shortcut: "F1", Action: "help_keys"},
+				{Label: "Keybindings", Shortcut: kb.Help, Action: "help_keys"},
 				{Label: "About", Action: "about"},
 			}},
 		},

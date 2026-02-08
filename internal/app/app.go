@@ -204,7 +204,7 @@ func New() Model {
 	dbg("New() called")
 	userCfg := config.LoadUserConfig()
 	theme := config.GetTheme(userCfg.Theme)
-	mb := menubar.New(80)
+	mb := menubar.New(80, userCfg.Keys)
 	username := os.Getenv("USER")
 	if username == "" {
 		username = os.Getenv("LOGNAME")
@@ -2377,7 +2377,7 @@ func (m *Model) helpOverlay() *ModalOverlay {
 			"COPY mode (scrollback + selection):",
 			"",
 			"  Enter Copy mode from Normal: c",
-			"  Enter Copy mode from Terminal: Pfx+c",
+			fmt.Sprintf("  Enter Copy mode from Terminal: %s+c", pfx),
 			"",
 			"  SCROLLING:",
 			"  Up / k         Scroll up one line",

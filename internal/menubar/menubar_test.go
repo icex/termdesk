@@ -3,10 +3,12 @@ package menubar
 import (
 	"strings"
 	"testing"
+
+	"github.com/icex/termdesk/internal/config"
 )
 
 func TestNew(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	if mb.Width != 120 {
 		t.Errorf("width = %d, want 120", mb.Width)
 	}
@@ -19,7 +21,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestSetWidth(t *testing.T) {
-	mb := New(80)
+	mb := New(80, config.DefaultKeyBindings())
 	mb.SetWidth(120)
 	if mb.Width != 120 {
 		t.Errorf("width = %d, want 120", mb.Width)
@@ -27,7 +29,7 @@ func TestSetWidth(t *testing.T) {
 }
 
 func TestOpenCloseMenu(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 
 	mb.OpenMenu(0)
 	if !mb.IsOpen() {
@@ -47,7 +49,7 @@ func TestOpenCloseMenu(t *testing.T) {
 }
 
 func TestOpenMenuOutOfBounds(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	mb.OpenMenu(99)
 	if mb.IsOpen() {
 		t.Error("should not open out-of-bounds menu")
@@ -59,7 +61,7 @@ func TestOpenMenuOutOfBounds(t *testing.T) {
 }
 
 func TestMoveHover(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	mb.OpenMenu(0) // File menu: New Terminal (0), Minimize (1), separator (2), Quit (3)
 
 	// Start at 0, move down → should go to 1
@@ -106,7 +108,7 @@ func TestMoveHover(t *testing.T) {
 }
 
 func TestMoveHoverNoMenu(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	result := mb.MoveHover(1)
 	if result != -1 {
 		t.Errorf("MoveHover with no menu = %d, want -1", result)
@@ -114,7 +116,7 @@ func TestMoveHoverNoMenu(t *testing.T) {
 }
 
 func TestMoveMenu(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	mb.OpenMenu(0)
 
 	mb.MoveMenu(1)
@@ -144,7 +146,7 @@ func TestMoveMenuEmpty(t *testing.T) {
 }
 
 func TestSelectedAction(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	mb.OpenMenu(0) // File: New Terminal, Minimize, separator, Quit
 	mb.HoverIndex = 0
 
@@ -162,7 +164,7 @@ func TestSelectedAction(t *testing.T) {
 }
 
 func TestSelectedActionDisabled(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	// File menu (index 0) has a separator at index 2
 	mb.OpenMenu(0)
 	mb.HoverIndex = 2 // separator
@@ -174,7 +176,7 @@ func TestSelectedActionDisabled(t *testing.T) {
 }
 
 func TestSelectedActionNoMenu(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	action := mb.SelectedAction()
 	if action != "" {
 		t.Errorf("no menu action = %q, want empty", action)
@@ -182,7 +184,7 @@ func TestSelectedActionNoMenu(t *testing.T) {
 }
 
 func TestSelectedActionOutOfBounds(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	mb.OpenMenu(0)
 	mb.HoverIndex = 99
 
@@ -193,7 +195,7 @@ func TestSelectedActionOutOfBounds(t *testing.T) {
 }
 
 func TestMenuXPositions(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	positions := mb.MenuXPositions()
 
 	if len(positions) != len(mb.Menus) {
@@ -214,7 +216,7 @@ func TestMenuXPositions(t *testing.T) {
 }
 
 func TestMenuAtX(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 
 	// Click on first menu label area
 	idx := mb.MenuAtX(2)
@@ -230,7 +232,7 @@ func TestMenuAtX(t *testing.T) {
 }
 
 func TestDropdownItemAtY(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	mb.OpenMenu(0)
 
 	idx := mb.DropdownItemAtY(0)
@@ -255,7 +257,7 @@ func TestDropdownItemAtY(t *testing.T) {
 }
 
 func TestDropdownItemNoMenu(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	idx := mb.DropdownItemAtY(0)
 	if idx != -1 {
 		t.Errorf("DropdownItemAtY with no menu = %d, want -1", idx)
@@ -263,7 +265,7 @@ func TestDropdownItemNoMenu(t *testing.T) {
 }
 
 func TestRender(t *testing.T) {
-	mb := New(80)
+	mb := New(80, config.DefaultKeyBindings())
 	rendered := mb.Render(80)
 
 	if len(rendered) == 0 {
@@ -285,7 +287,7 @@ func TestRender(t *testing.T) {
 }
 
 func TestRenderOpenMenu(t *testing.T) {
-	mb := New(80)
+	mb := New(80, config.DefaultKeyBindings())
 	mb.OpenMenu(0)
 	rendered := mb.Render(80)
 
@@ -296,7 +298,7 @@ func TestRenderOpenMenu(t *testing.T) {
 }
 
 func TestRenderDropdown(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	mb.OpenMenu(0)
 
 	lines := mb.RenderDropdown()
@@ -324,7 +326,7 @@ func TestRenderDropdown(t *testing.T) {
 }
 
 func TestRenderDropdownSeparator(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	mb.OpenMenu(0) // File menu has a separator
 
 	lines := mb.RenderDropdown()
@@ -341,7 +343,7 @@ func TestRenderDropdownSeparator(t *testing.T) {
 }
 
 func TestRenderDropdownHover(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	mb.OpenMenu(0)
 	mb.HoverIndex = 0
 
@@ -359,7 +361,7 @@ func TestRenderDropdownHover(t *testing.T) {
 }
 
 func TestRenderDropdownNoMenu(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	lines := mb.RenderDropdown()
 	if lines != nil {
 		t.Error("expected nil dropdown when no menu open")
@@ -367,7 +369,7 @@ func TestRenderDropdownNoMenu(t *testing.T) {
 }
 
 func TestRenderNoIndicators(t *testing.T) {
-	mb := New(80)
+	mb := New(80, config.DefaultKeyBindings())
 	mb.ShowClock = false
 	mb.ShowCPU = false
 	mb.ShowMemory = false
@@ -455,7 +457,7 @@ func TestBatColorLevel(t *testing.T) {
 }
 
 func TestRightZonesRuneWidth(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	mb.ShowCPU = true
 	mb.ShowMemory = true
 	mb.ShowBattery = false
@@ -480,7 +482,7 @@ func TestRightZonesRuneWidth(t *testing.T) {
 }
 
 func TestRightZonesWithBattery(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	mb.ShowCPU = true
 	mb.ShowMemory = true
 	mb.ShowBattery = true
@@ -510,7 +512,7 @@ func TestRightZonesWithBattery(t *testing.T) {
 }
 
 func TestRightZonesNoBattery(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	mb.ShowBattery = true
 	mb.BatPresent = false // no battery on system
 
@@ -523,7 +525,7 @@ func TestRightZonesNoBattery(t *testing.T) {
 }
 
 func TestRenderRightWithUsername(t *testing.T) {
-	mb := New(80)
+	mb := New(80, config.DefaultKeyBindings())
 	mb.Username = "testuser"
 	rendered := mb.Render(80)
 
@@ -533,7 +535,7 @@ func TestRenderRightWithUsername(t *testing.T) {
 }
 
 func TestRenderRightWithBattery(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	mb.ShowBattery = true
 	mb.BatPresent = true
 	mb.BatPct = 85
@@ -545,7 +547,7 @@ func TestRenderRightWithBattery(t *testing.T) {
 }
 
 func TestMenuCount(t *testing.T) {
-	mb := New(120)
+	mb := New(120, config.DefaultKeyBindings())
 	// Should have 4 menus: File, Apps, View, Help (no Edit)
 	if len(mb.Menus) != 4 {
 		t.Errorf("menu count = %d, want 4", len(mb.Menus))

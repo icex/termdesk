@@ -394,6 +394,144 @@ func TestClockString(t *testing.T) {
 	}
 }
 
+func TestFormatBattery(t *testing.T) {
+	tests := []struct {
+		pct      float64
+		charging bool
+		wantPct  string
+		wantBolt bool
+	}{
+		{95, false, "95%", false},
+		{72, true, "72%", true},
+		{45, false, "45%", false},
+		{25, false, "25%", false},
+		{8, true, "8%", true},
+		{100, false, "100%", false},
+		{0, false, "0%", false},
+	}
+	for _, tt := range tests {
+		s := FormatBattery(tt.pct, tt.charging)
+		if !strings.Contains(s, tt.wantPct) {
+			t.Errorf("FormatBattery(%v, %v) = %q, missing %q", tt.pct, tt.charging, s, tt.wantPct)
+		}
+		hasBolt := strings.Contains(s, "\u26a1")
+		if hasBolt != tt.wantBolt {
+			t.Errorf("FormatBattery(%v, %v) bolt=%v, want %v", tt.pct, tt.charging, hasBolt, tt.wantBolt)
+		}
+	}
+}
+
+func TestBatColorLevel(t *testing.T) {
+	if BatColorLevel(80) != "green" {
+		t.Error("80% should be green")
+	}
+	if BatColorLevel(50) != "green" {
+		t.Error("50% should be green")
+	}
+	if BatColorLevel(30) != "yellow" {
+		t.Error("30% should be yellow")
+	}
+	if BatColorLevel(20) != "yellow" {
+		t.Error("20% should be yellow")
+	}
+	if BatColorLevel(10) != "red" {
+		t.Error("10% should be red")
+	}
+	if BatColorLevel(0) != "red" {
+		t.Error("0% should be red")
+	}
+}
+
+func TestRightZonesRuneWidth(t *testing.T) {
+	mb := New(120)
+	mb.ShowCPU = true
+	mb.ShowMemory = true
+	mb.ShowBattery = false
+	mb.ShowClock = true
+	mb.CPUPct = 25
+	mb.MemGB = 4.0
+
+	zones := mb.RightZones(120)
+	// Zones should not overlap
+	for i := 1; i < len(zones); i++ {
+		if zones[i].Start < zones[i-1].End {
+			t.Errorf("zone %q (start=%d) overlaps with %q (end=%d)",
+				zones[i].Type, zones[i].Start, zones[i-1].Type, zones[i-1].End)
+		}
+	}
+	// All zones should have positive width
+	for _, z := range zones {
+		if z.End <= z.Start {
+			t.Errorf("zone %q has zero/negative width: start=%d end=%d", z.Type, z.Start, z.End)
+		}
+	}
+}
+
+func TestRightZonesWithBattery(t *testing.T) {
+	mb := New(120)
+	mb.ShowCPU = true
+	mb.ShowMemory = true
+	mb.ShowBattery = true
+	mb.BatPresent = true
+	mb.BatPct = 75
+	mb.ShowClock = true
+
+	zones := mb.RightZones(120)
+
+	// Should have 4 zones: cpu, mem, bat, clock
+	types := make(map[string]bool)
+	for _, z := range zones {
+		types[z.Type] = true
+	}
+	for _, want := range []string{"cpu", "mem", "bat", "clock"} {
+		if !types[want] {
+			t.Errorf("missing zone type %q", want)
+		}
+	}
+
+	// Zones should not overlap
+	for i := 1; i < len(zones); i++ {
+		if zones[i].Start < zones[i-1].End {
+			t.Errorf("zone %q overlaps with %q", zones[i].Type, zones[i-1].Type)
+		}
+	}
+}
+
+func TestRightZonesNoBattery(t *testing.T) {
+	mb := New(120)
+	mb.ShowBattery = true
+	mb.BatPresent = false // no battery on system
+
+	zones := mb.RightZones(120)
+	for _, z := range zones {
+		if z.Type == "bat" {
+			t.Error("should not have battery zone when BatPresent=false")
+		}
+	}
+}
+
+func TestRenderRightWithUsername(t *testing.T) {
+	mb := New(80)
+	mb.Username = "testuser"
+	rendered := mb.Render(80)
+
+	if !strings.Contains(rendered, "testuser") {
+		t.Errorf("expected username in render: %q", rendered)
+	}
+}
+
+func TestRenderRightWithBattery(t *testing.T) {
+	mb := New(120)
+	mb.ShowBattery = true
+	mb.BatPresent = true
+	mb.BatPct = 85
+
+	rendered := mb.Render(120)
+	if !strings.Contains(rendered, "85%") {
+		t.Errorf("expected battery percentage in render: %q", rendered)
+	}
+}
+
 func TestMenuCount(t *testing.T) {
 	mb := New(120)
 	// Should have 4 menus: File, Apps, View, Help (no Edit)

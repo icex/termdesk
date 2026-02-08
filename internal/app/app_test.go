@@ -815,6 +815,182 @@ func TestViewRendersLauncher(t *testing.T) {
 	}
 }
 
+func TestMaxWindows(t *testing.T) {
+	m := setupReadyModel()
+	// Open maxWindows (9) demo windows
+	for i := 0; i < 9; i++ {
+		m.openDemoWindow()
+	}
+	if m.wm.Count() != 9 {
+		t.Errorf("expected 9 windows, got %d", m.wm.Count())
+	}
+	// 10th via openTerminalWindowWith (which checks limit) should not open
+	cmd := m.openTerminalWindowWith("", nil)
+	if cmd != nil {
+		t.Error("expected nil cmd when at max windows")
+	}
+	if m.wm.Count() != 9 {
+		t.Errorf("expected 9 windows after max limit, got %d", m.wm.Count())
+	}
+}
+
+func TestRenameDialogOpen(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	fw := m.wm.FocusedWindow()
+	if fw == nil {
+		t.Fatal("expected focused window")
+	}
+
+	// Press 'r' to open rename dialog
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Text: "r"}))
+	model := updated.(Model)
+
+	if model.renameDialog == nil {
+		t.Fatal("expected rename dialog to be open")
+	}
+	if model.renameDialog.WindowID != fw.ID {
+		t.Errorf("rename dialog window ID = %q, want %q", model.renameDialog.WindowID, fw.ID)
+	}
+}
+
+func TestRenameDialogType(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	originalTitle := m.wm.FocusedWindow().Title
+
+	// Open rename dialog (pre-filled with current title)
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Text: "r"}))
+	model := updated.(Model)
+
+	if string(model.renameDialog.Text) != originalTitle {
+		t.Errorf("initial text = %q, want %q", string(model.renameDialog.Text), originalTitle)
+	}
+
+	// Clear with Ctrl+U, then type "hello"
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: 'u', Mod: tea.ModCtrl}))
+	model = updated.(Model)
+	for _, ch := range "hello" {
+		updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: ch, Text: string(ch)}))
+		model = updated.(Model)
+	}
+	if string(model.renameDialog.Text) != "hello" {
+		t.Errorf("rename text = %q, want 'hello'", string(model.renameDialog.Text))
+	}
+}
+
+func TestRenameDialogConfirm(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	winID := m.wm.FocusedWindow().ID
+
+	// Open rename dialog
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Text: "r"}))
+	model := updated.(Model)
+
+	// Clear with Ctrl+U, then type "NewName"
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: 'u', Mod: tea.ModCtrl}))
+	model = updated.(Model)
+	for _, ch := range "NewName" {
+		updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: ch, Text: string(ch)}))
+		model = updated.(Model)
+	}
+
+	// Press Enter to confirm
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+
+	if model.renameDialog != nil {
+		t.Error("rename dialog should be closed after Enter")
+	}
+	w := model.wm.WindowByID(winID)
+	if w == nil {
+		t.Fatal("window not found")
+	}
+	if w.Title != "NewName" {
+		t.Errorf("window title = %q, want 'NewName'", w.Title)
+	}
+}
+
+func TestRenameDialogCancel(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	originalTitle := m.wm.FocusedWindow().Title
+
+	// Open rename dialog
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Text: "r"}))
+	model := updated.(Model)
+
+	// Type something
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: 'x', Text: "x"}))
+	model = updated.(Model)
+
+	// Press Escape to cancel
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	model = updated.(Model)
+
+	if model.renameDialog != nil {
+		t.Error("rename dialog should be closed after Escape")
+	}
+	if model.wm.FocusedWindow().Title != originalTitle {
+		t.Error("window title should not change after cancel")
+	}
+}
+
+func TestSystemStatsMsgWithBattery(t *testing.T) {
+	m := setupReadyModel()
+	updated, cmd := m.Update(SystemStatsMsg{
+		CPU:         42.5,
+		MemGB:       8.2,
+		BatPct:      75,
+		BatCharging: true,
+		BatPresent:  true,
+	})
+	model := updated.(Model)
+	if cmd == nil {
+		t.Error("expected tick cmd from SystemStatsMsg")
+	}
+	if model.menuBar.CPUPct != 42.5 {
+		t.Errorf("CPU = %v, want 42.5", model.menuBar.CPUPct)
+	}
+	if model.menuBar.MemGB != 8.2 {
+		t.Errorf("MemGB = %v, want 8.2", model.menuBar.MemGB)
+	}
+	if model.menuBar.BatPct != 75 {
+		t.Errorf("BatPct = %v, want 75", model.menuBar.BatPct)
+	}
+	if !model.menuBar.BatCharging {
+		t.Error("expected BatCharging=true")
+	}
+	if !model.menuBar.BatPresent {
+		t.Error("expected BatPresent=true")
+	}
+}
+
+func TestExposeSelectMaximizes(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	m.openDemoWindow()
+
+	// Enter expose mode
+	m.exposeMode = true
+
+	// Press "1" to select first window
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: '1', Text: "1"}))
+	model := updated.(Model)
+
+	if model.exposeMode {
+		t.Error("expose should exit after selection")
+	}
+	fw := model.wm.FocusedWindow()
+	if fw == nil {
+		t.Fatal("expected focused window")
+	}
+	if !fw.IsMaximized() {
+		t.Error("selected window should be maximized")
+	}
+}
+
 func TestPtyClosedClosesWindow(t *testing.T) {
 	m := setupReadyModel()
 	m.openDemoWindow()

@@ -1,6 +1,6 @@
 module github.com/icex/termdesk
 
-go 1.25.7
+go 1.25.6
 
 require (
 	charm.land/bubbletea/v2 v2.0.0-rc.2 // indirect

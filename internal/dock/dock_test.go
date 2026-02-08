@@ -162,6 +162,65 @@ func TestRenderCells(t *testing.T) {
 	}
 }
 
+func TestIconColors(t *testing.T) {
+	d := New(120)
+	// Every default item should have a color
+	for i, item := range d.Items {
+		if item.IconColor == "" {
+			t.Errorf("item %d (%s) has no IconColor", i, item.Label)
+		}
+	}
+}
+
+func TestRenderCellsIconColor(t *testing.T) {
+	d := New(120)
+	cells := d.RenderCells(120)
+
+	// At least some cells should have icon colors
+	hasColor := false
+	for _, c := range cells {
+		if c.IconColor != "" {
+			hasColor = true
+			break
+		}
+	}
+	if !hasColor {
+		t.Error("expected some cells with IconColor set")
+	}
+}
+
+func TestRenderCellsHoverIconColor(t *testing.T) {
+	d := New(120)
+	d.SetHover(1) // hover Terminal item
+	cells := d.RenderCells(120)
+
+	// Hovered item should have both Accent and IconColor
+	hasAccentWithColor := false
+	for _, c := range cells {
+		if c.Accent && c.IconColor != "" {
+			hasAccentWithColor = true
+			break
+		}
+	}
+	if !hasAccentWithColor {
+		t.Error("expected hovered icon cells with both Accent and IconColor")
+	}
+}
+
+func TestIconsOnlyMode(t *testing.T) {
+	d := New(120)
+	d.IconsOnly = true
+	rendered := d.Render(120)
+
+	// Should not contain labels (except as part of icon chars)
+	if strings.Contains(rendered, "Terminal") {
+		t.Error("icons-only mode should not show 'Terminal' label")
+	}
+	if strings.Contains(rendered, "nvim") {
+		t.Error("icons-only mode should not show 'nvim' label")
+	}
+}
+
 func TestRuneCount(t *testing.T) {
 	if utf8.RuneCountInString("hello") != 5 {
 		t.Error("RuneCountInString(hello) != 5")

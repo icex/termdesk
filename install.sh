@@ -265,8 +265,14 @@ build() {
     # Ensure GOPATH/bin is in PATH for go install dependencies
     export PATH="${HOME}/go/bin:${HOME}/.local/go/bin:/usr/local/go/bin:${PATH}"
 
-    info "Running: ${GO_CMD} build -o bin/termdesk ./cmd/termdesk"
-    "${GO_CMD}" build -o bin/termdesk ./cmd/termdesk
+    local build_flags=()
+    # Android/Termux requires PIE (Position Independent Executable)
+    if [[ "${OS}" == "termux" ]]; then
+        build_flags+=("-buildmode=pie")
+    fi
+
+    info "Running: ${GO_CMD} build ${build_flags[*]} -o bin/termdesk ./cmd/termdesk"
+    "${GO_CMD}" build "${build_flags[@]}" -o bin/termdesk ./cmd/termdesk
 
     if [[ ! -x bin/termdesk ]]; then
         err "Build failed -- binary not found at bin/termdesk"

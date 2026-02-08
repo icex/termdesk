@@ -83,9 +83,16 @@ cd termdesk
 ### Manual Build (no install script)
 
 ```bash
+# Linux / macOS
 go build -o bin/termdesk ./cmd/termdesk
 ./bin/termdesk
+
+# Android (Termux) — requires PIE build mode
+go build -buildmode=pie -o bin/termdesk ./cmd/termdesk
+./bin/termdesk
 ```
+
+> **Termux note**: `go run` does not work on Android — it produces an `unexpected e_type: 2` error because Android requires PIE (Position Independent Executable) binaries. Always use `go build -buildmode=pie` then run the binary.
 
 ## Quick Start
 

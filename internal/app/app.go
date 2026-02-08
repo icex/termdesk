@@ -489,17 +489,11 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleTerminalModeKey handles keys when in Terminal mode.
-// Only the prefix key and F2 are intercepted; everything else goes to the terminal.
+// Only the prefix key is intercepted; everything else goes to the terminal.
 func (m Model) handleTerminalModeKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
 	// Prefix key → enter prefix pending state
 	if key == m.keybindings.Prefix {
 		m.prefixPending = true
-		return m, nil
-	}
-
-	// F2 is a hardcoded escape hatch (always exits Terminal mode)
-	if key == "f2" {
-		m.inputMode = ModeNormal
 		return m, nil
 	}
 
@@ -1505,7 +1499,7 @@ func (m *Model) openTerminalWindowWith(command string, args []string) tea.Cmd {
 				lastSend time.Time
 				pending  *time.Timer
 			)
-			const minInterval = 8 * time.Millisecond
+			const minInterval = 16 * time.Millisecond
 			readBuf := make([]byte, 32768)
 			for {
 				n, err := term.ReadOnce(readBuf)
@@ -2207,8 +2201,9 @@ func (m Model) View() tea.View {
 	var v tea.View
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion // CellMotion (1002) is more compatible with Termux than AllMotion (1003)
-	v.BackgroundColor = hexToColor(m.theme.DesktopBg)
-	v.ForegroundColor = hexToColor("#C0C0C0")
+	c := m.theme.C()
+	v.BackgroundColor = c.DesktopBg
+	v.ForegroundColor = c.DefaultFg
 
 	if !m.ready {
 		v.SetContent("Starting termdesk...")
@@ -2223,7 +2218,7 @@ func (m Model) View() tea.View {
 		buf := RenderExposeTransition(m.wm, m.theme, m.animations)
 		RenderMenuBar(buf, m.menuBar, m.theme, m.inputMode, m.prefixPending)
 		RenderDock(buf, m.dock, m.theme, nil)
-		v.SetContent(BufferToString(buf))
+		v.SetContent(buf) // Direct cell transfer — no ANSI round-trip
 		return v
 	}
 
@@ -2231,7 +2226,7 @@ func (m Model) View() tea.View {
 		buf := RenderExpose(m.wm, m.theme)
 		RenderMenuBar(buf, m.menuBar, m.theme, m.inputMode, m.prefixPending)
 		RenderDock(buf, m.dock, m.theme, nil)
-		v.SetContent(BufferToString(buf))
+		v.SetContent(buf)
 		return v
 	}
 
@@ -2267,6 +2262,6 @@ func (m Model) View() tea.View {
 	if m.renameDialog != nil {
 		RenderRenameDialog(buf, m.renameDialog, m.theme)
 	}
-	v.SetContent(BufferToString(buf))
+	v.SetContent(buf) // Direct cell transfer — no ANSI round-trip
 	return v
 }

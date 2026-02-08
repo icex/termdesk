@@ -7,6 +7,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	uv "github.com/charmbracelet/ultraviolet"
+	tea "charm.land/bubbletea/v2"
 	"github.com/icex/termdesk/internal/config"
 	"github.com/icex/termdesk/internal/dock"
 	"github.com/icex/termdesk/internal/launcher"
@@ -51,16 +53,31 @@ type Buffer struct {
 }
 
 // hexToColor converts a "#RRGGBB" hex string to color.Color.
+// Uses manual hex parsing instead of fmt.Sscanf for performance.
 func hexToColor(hex string) color.Color {
-	if hex == "" {
+	if len(hex) != 7 || hex[0] != '#' {
 		return nil
 	}
-	if len(hex) == 7 && hex[0] == '#' {
-		var r, g, b uint8
-		fmt.Sscanf(hex[1:], "%02x%02x%02x", &r, &g, &b)
-		return color.RGBA{R: r, G: g, B: b, A: 255}
+	r := hexByte(hex[1], hex[2])
+	g := hexByte(hex[3], hex[4])
+	b := hexByte(hex[5], hex[6])
+	return color.RGBA{R: r, G: g, B: b, A: 255}
+}
+
+func hexByte(hi, lo byte) uint8 {
+	return hexNibble(hi)<<4 | hexNibble(lo)
+}
+
+func hexNibble(b byte) uint8 {
+	switch {
+	case b >= '0' && b <= '9':
+		return b - '0'
+	case b >= 'a' && b <= 'f':
+		return b - 'a' + 10
+	case b >= 'A' && b <= 'F':
+		return b - 'A' + 10
 	}
-	return nil
+	return 0
 }
 
 // NewBuffer creates a buffer filled with spaces and the desktop background.
@@ -115,6 +132,79 @@ func (b *Buffer) FillRect(r geometry.Rect, char rune, fg, bg string) {
 	}
 }
 
+// SetStringC writes a string starting at (x, y) using pre-parsed color.Color values.
+func (b *Buffer) SetStringC(x, y int, s string, fg, bg color.Color) {
+	col := 0
+	for _, ch := range s {
+		b.SetCell(x+col, y, ch, fg, bg, 0)
+		col++
+	}
+}
+
+// FillRectC fills a rectangular area using pre-parsed color.Color values.
+func (b *Buffer) FillRectC(r geometry.Rect, char rune, fg, bg color.Color) {
+	for y := r.Y; y < r.Bottom(); y++ {
+		for x := r.X; x < r.Right(); x++ {
+			b.SetCell(x, y, char, fg, bg, 0)
+		}
+	}
+}
+
+// Draw implements tea.Layer — transfers cells directly to the screen,
+// bypassing ANSI serialization and re-parsing entirely.
+func (b *Buffer) Draw(s tea.Screen, r tea.Rectangle) {
+	for y := r.Min.Y; y < r.Max.Y && y-r.Min.Y < b.Height; y++ {
+		row := y - r.Min.Y
+		for x := r.Min.X; x < r.Max.X && x-r.Min.X < b.Width; x++ {
+			col := x - r.Min.X
+			cell := b.Cells[row][col]
+			s.SetCell(x, y, &uv.Cell{
+				Content: string(cell.Char),
+				Width:   1,
+				Style:   uv.Style{Fg: cell.Fg, Bg: cell.Bg, Attrs: cell.Attrs},
+			})
+		}
+	}
+}
+
+// NewThemedBuffer creates a buffer with the theme's desktop background and optional pattern.
+func NewThemedBuffer(width, height int, theme config.Theme) *Buffer {
+	c := theme.C()
+	fg := c.DefaultFg
+	bg := c.DesktopBg
+	if bg == nil {
+		bg = color.RGBA{A: 255}
+	}
+
+	patChar := theme.DesktopPatternChar
+	patFg := c.DesktopPatternFg
+	if patFg == nil {
+		patFg = fg
+	}
+
+	cells := make([][]Cell, height)
+	for y := range cells {
+		cells[y] = make([]Cell, width)
+		for x := range cells[y] {
+			ch := ' '
+			cellFg := fg
+			if patChar != 0 {
+				if patChar == '░' || patChar == '▒' || patChar == '▓' {
+					// Block patterns fill every cell
+					ch = patChar
+					cellFg = patFg
+				} else if (x+y)%4 == 0 {
+					// Sparse diamond pattern for dots/symbols
+					ch = patChar
+					cellFg = patFg
+				}
+			}
+			cells[y][x] = Cell{Char: ch, Fg: cellFg, Bg: bg}
+		}
+	}
+	return &Buffer{Width: width, Height: height, Cells: cells}
+}
+
 // RenderWindow draws a single window (border + title bar + content) into the buffer.
 // showCursor controls whether the terminal cursor is rendered (false = blink-off phase).
 // scrollOffset > 0 shows scrollback lines in Copy mode.
@@ -128,28 +218,30 @@ func RenderWindow(buf *Buffer, w *window.Window, theme config.Theme, term *termi
 		return
 	}
 
-	// Pick colors based on focus state
-	borderFg := theme.InactiveBorderFg
-	borderBg := theme.InactiveBorderBg
-	titleFg := theme.InactiveTitleFg
-	titleBg := theme.InactiveTitleBg
+	c := theme.C()
+
+	// Pick pre-parsed colors based on focus state
+	borderFg := c.InactiveBorderFg
+	borderBg := c.InactiveBorderBg
+	titleFg := c.InactiveTitleFg
+	titleBg := c.InactiveTitleBg
 	if w.Focused {
-		borderFg = theme.ActiveBorderFg
-		borderBg = theme.ActiveBorderBg
-		titleFg = theme.ActiveTitleFg
-		titleBg = theme.ActiveTitleBg
+		borderFg = c.ActiveBorderFg
+		borderBg = c.ActiveBorderBg
+		titleFg = c.ActiveTitleFg
+		titleBg = c.ActiveTitleBg
 	} else if w.HasNotification {
-		borderFg = theme.NotificationFg
-		borderBg = theme.NotificationBg
+		borderFg = c.NotificationFg
+		borderBg = c.NotificationBg
 	}
 
 	// Fill content area with spaces (clear background)
 	contentRect := w.ContentRect()
-	contentBg := theme.ContentBg
-	if contentBg == "" {
+	contentBg := c.ContentBg
+	if contentBg == nil {
 		contentBg = borderBg
 	}
-	buf.FillRect(contentRect, ' ', borderFg, contentBg)
+	buf.FillRectC(contentRect, ' ', borderFg, contentBg)
 
 	tbh := w.TitleBarHeight
 	if tbh < 1 {
@@ -160,26 +252,23 @@ func RenderWindow(buf *Buffer, w *window.Window, theme config.Theme, term *termi
 	for row := 0; row < tbh; row++ {
 		ty := r.Y + row
 		if row == 0 {
-			// First row: top border corners
-			buf.Set(r.X, ty, theme.BorderTopLeft, borderFg, titleBg)
+			buf.SetCell(r.X, ty, theme.BorderTopLeft, borderFg, titleBg, 0)
 			for x := r.X + 1; x < r.Right()-1; x++ {
-				buf.Set(x, ty, theme.BorderHorizontal, borderFg, titleBg)
+				buf.SetCell(x, ty, theme.BorderHorizontal, borderFg, titleBg, 0)
 			}
-			buf.Set(r.Right()-1, ty, theme.BorderTopRight, borderFg, titleBg)
+			buf.SetCell(r.Right()-1, ty, theme.BorderTopRight, borderFg, titleBg, 0)
 		} else {
-			// Extra title bar rows: side borders + fill
-			buf.Set(r.X, ty, theme.BorderVertical, borderFg, titleBg)
+			buf.SetCell(r.X, ty, theme.BorderVertical, borderFg, titleBg, 0)
 			for x := r.X + 1; x < r.Right()-1; x++ {
-				buf.Set(x, ty, ' ', titleFg, titleBg)
+				buf.SetCell(x, ty, ' ', titleFg, titleBg, 0)
 			}
-			buf.Set(r.Right()-1, ty, theme.BorderVertical, borderFg, titleBg)
+			buf.SetCell(r.Right()-1, ty, theme.BorderVertical, borderFg, titleBg, 0)
 		}
 	}
 
 	// Place title text and buttons on the center row of the title bar
 	titleRow := r.Y + tbh/2
 
-	// Draw title text (left-aligned in title bar)
 	closeW := runeLen(theme.CloseButton)
 	minW := runeLen(theme.MinButton)
 	maxW := runeLen(theme.MaxButton)
@@ -189,7 +278,7 @@ func RenderWindow(buf *Buffer, w *window.Window, theme config.Theme, term *termi
 	if w.Resizable {
 		buttonsW += maxW + snapLW + snapRW
 	}
-	titleSpace := r.Width - 2 - buttonsW // space between corner and buttons
+	titleSpace := r.Width - 2 - buttonsW
 	title := w.Title
 	titleRunes := []rune(title)
 	if len(titleRunes) > titleSpace {
@@ -202,9 +291,9 @@ func RenderWindow(buf *Buffer, w *window.Window, theme config.Theme, term *termi
 		}
 	}
 	titleX := r.X + 1
-	buf.SetString(titleX, titleRow, " "+title+" ", titleFg, titleBg)
+	buf.SetStringC(titleX, titleRow, " "+title+" ", titleFg, titleBg)
 
-	// Draw title bar buttons (right side): [◧][◨][□][_][×]
+	// Draw title bar buttons (right side)
 	closeX := r.Right() - 1 - closeW
 	minX := closeX - minW
 	if w.Resizable {
@@ -215,35 +304,30 @@ func RenderWindow(buf *Buffer, w *window.Window, theme config.Theme, term *termi
 		maxX := minX - maxW
 		snapRX := maxX - snapRW
 		snapLX := snapRX - snapLW
-		buf.SetString(snapLX, titleRow, theme.SnapLeftButton, titleFg, titleBg)
-		buf.SetString(snapRX, titleRow, theme.SnapRightButton, titleFg, titleBg)
-		buf.SetString(maxX, titleRow, maxStr, titleFg, titleBg)
+		buf.SetStringC(snapLX, titleRow, theme.SnapLeftButton, titleFg, titleBg)
+		buf.SetStringC(snapRX, titleRow, theme.SnapRightButton, titleFg, titleBg)
+		buf.SetStringC(maxX, titleRow, maxStr, titleFg, titleBg)
 	}
-	buf.SetString(minX, titleRow, theme.MinButton, titleFg, titleBg)
-	buf.SetString(closeX, titleRow, theme.CloseButton, titleFg, titleBg)
+	buf.SetStringC(minX, titleRow, theme.MinButton, titleFg, titleBg)
+	buf.SetStringC(closeX, titleRow, theme.CloseButton, titleFg, titleBg)
 
 	// Draw bottom border
-	buf.Set(r.X, r.Bottom()-1, theme.BorderBottomLeft, borderFg, borderBg)
+	buf.SetCell(r.X, r.Bottom()-1, theme.BorderBottomLeft, borderFg, borderBg, 0)
 	for x := r.X + 1; x < r.Right()-1; x++ {
-		buf.Set(x, r.Bottom()-1, theme.BorderHorizontal, borderFg, borderBg)
+		buf.SetCell(x, r.Bottom()-1, theme.BorderHorizontal, borderFg, borderBg, 0)
 	}
-	buf.Set(r.Right()-1, r.Bottom()-1, theme.BorderBottomRight, borderFg, borderBg)
+	buf.SetCell(r.Right()-1, r.Bottom()-1, theme.BorderBottomRight, borderFg, borderBg, 0)
 
 	// Draw side borders
 	for y := r.Y + 1; y < r.Bottom()-1; y++ {
-		buf.Set(r.X, y, theme.BorderVertical, borderFg, borderBg)
-		buf.Set(r.Right()-1, y, theme.BorderVertical, borderFg, borderBg)
+		buf.SetCell(r.X, y, theme.BorderVertical, borderFg, borderBg, 0)
+		buf.SetCell(r.Right()-1, y, theme.BorderVertical, borderFg, borderBg, 0)
 	}
 
 	// Draw terminal content if present
 	if term != nil {
-		cbg := theme.ContentBg
-		if cbg == "" {
-			cbg = borderBg
-		}
-		// Default FG: light gray text for cells with no explicit foreground
-		defaultFg := hexToColor("#C0C0C0")
-		renderTerminalContent(buf, contentRect, term, defaultFg, hexToColor(cbg), scrollOffset)
+		defaultFg := c.DefaultFg
+		renderTerminalContent(buf, contentRect, term, defaultFg, contentBg, scrollOffset)
 
 		// Show scroll indicator in bottom border when scrolled back
 		if scrollOffset > 0 {
@@ -255,16 +339,12 @@ func RenderWindow(buf *Buffer, w *window.Window, theme config.Theme, term *termi
 			for i, ch := range indicatorRunes {
 				x := startX + i
 				if x > w.Rect.X && x < w.Rect.Right()-1 {
-					borderFgC := hexToColor(theme.ActiveBorderFg)
-					borderBgC := hexToColor(theme.ActiveBorderBg)
-					buf.SetCell(x, borderY, ch, borderFgC, borderBgC, 0)
+					buf.SetCell(x, borderY, ch, c.ActiveBorderFg, c.ActiveBorderBg, 0)
 				}
 			}
 		}
 
-		// Show cursor for focused terminal windows — invert fg/bg at cursor position.
-		// Respect the app's cursor visibility (DECTCEM): btop/htop hide it.
-		// Don't show cursor when scrolled back (viewing history, not live).
+		// Show cursor for focused terminal windows
 		if w.Focused && showCursor && !term.IsCursorHidden() && scrollOffset == 0 {
 			cx, cy := term.CursorPosition()
 			sx := contentRect.X + cx
@@ -278,9 +358,9 @@ func RenderWindow(buf *Buffer, w *window.Window, theme config.Theme, term *termi
 		}
 	}
 
-	// Desaturate unfocused windows — go monochrome + dim slightly
+	// Desaturate unfocused windows
 	if !w.Focused && theme.UnfocusedFade > 0 {
-		dimBg := hexToColor(theme.DesktopBg)
+		dimBg := c.DesktopBg
 		for y := contentRect.Y; y < contentRect.Bottom(); y++ {
 			for x := contentRect.X; x < contentRect.Right(); x++ {
 				if x >= 0 && x < buf.Width && y >= 0 && y < buf.Height {
@@ -455,10 +535,10 @@ func RenderFrame(wm *window.Manager, theme config.Theme, terminals map[string]*t
 	fullWidth := wa.Width
 	fullHeight := wa.Height + wa.Y + wm.ReservedBottom()
 	if fullWidth <= 0 || fullHeight <= 0 {
-		return NewBuffer(1, 1, theme.DesktopBg)
+		return NewThemedBuffer(1, 1, theme)
 	}
 
-	buf := NewBuffer(fullWidth, fullHeight, theme.DesktopBg)
+	buf := NewThemedBuffer(fullWidth, fullHeight, theme)
 
 	// Draw windows back-to-front (painter's algorithm)
 	for _, w := range wm.Windows() {
@@ -496,38 +576,39 @@ func RenderMenuBar(buf *Buffer, mb *menubar.MenuBar, theme config.Theme, mode In
 		return
 	}
 
+	c := theme.C()
+
 	// Fill menu bar row with menu bar background
-	mbFg := theme.MenuBarFg
-	mbBg := theme.MenuBarBg
-	if mbFg == "" {
-		mbFg = theme.ActiveTitleFg
+	mbFg := c.MenuBarFg
+	mbBg := c.MenuBarBg
+	if mbFg == nil {
+		mbFg = c.ActiveTitleFg
 	}
-	if mbBg == "" {
-		mbBg = theme.ActiveTitleBg
+	if mbBg == nil {
+		mbBg = c.ActiveTitleBg
 	}
 	for x := 0; x < buf.Width; x++ {
-		buf.Set(x, 0, ' ', mbFg, mbBg)
+		buf.SetCell(x, 0, ' ', mbFg, mbBg, 0)
 	}
 
 	// Compute mode badge (placed at far right, fixed width)
 	var modeLabel string
-	var modeFg, modeBg string
+	var modeFC, modeBC color.Color
+	badgeFg := color.RGBA{R: 30, G: 30, B: 46, A: 255} // #1E1E2E
 	if prefixPending {
 		modeLabel = " \uf11c PREFIX   "
-		modeFg = "#1E1E2E"
-		modeBg = "#E06C75" // red — signals "waiting for action"
+		modeFC = badgeFg
+		modeBC = color.RGBA{R: 224, G: 108, B: 117, A: 255} // #E06C75 red
 	} else {
 		modeLabel = modeBadge(mode)
+		modeFC = badgeFg
 		switch mode {
 		case ModeTerminal:
-			modeFg = "#1E1E2E"
-			modeBg = "#98C379" // green
+			modeBC = color.RGBA{R: 152, G: 195, B: 121, A: 255} // #98C379 green
 		case ModeCopy:
-			modeFg = "#1E1E2E"
-			modeBg = "#61AFEF" // blue
-		default: // ModeNormal
-			modeFg = "#1E1E2E"
-			modeBg = "#E5C07B" // yellow
+			modeBC = color.RGBA{R: 97, G: 175, B: 239, A: 255} // #61AFEF blue
+		default:
+			modeBC = color.RGBA{R: 229, G: 192, B: 123, A: 255} // #E5C07B yellow
 		}
 	}
 	modeLabelLen := runewidth.StringWidth(modeLabel)
@@ -541,27 +622,27 @@ func RenderMenuBar(buf *Buffer, mb *menubar.MenuBar, theme config.Theme, mode In
 	col := 0
 	for _, ch := range barText {
 		if col < buf.Width {
-			buf.Set(col, 0, ch, mbFg, mbBg)
+			buf.SetCell(col, 0, ch, mbFg, mbBg, 0)
 		}
 		col++
 	}
 
 	// Colorize right-side CPU/MEM indicators
 	for _, zone := range mb.RightZones(effectiveWidth) {
-		var colorHex string
+		var zoneColor color.Color
 		switch zone.Type {
 		case "cpu":
-			colorHex = levelColor(menubar.CPUColorLevel(mb.CPUPct))
+			zoneColor = levelColorC(menubar.CPUColorLevel(mb.CPUPct))
 		case "mem":
 			_, totalGB := menubar.ReadMemoryInfo()
-			colorHex = levelColor(menubar.MemColorLevel(mb.MemGB, totalGB))
+			zoneColor = levelColorC(menubar.MemColorLevel(mb.MemGB, totalGB))
 		case "bat":
-			colorHex = levelColor(menubar.BatColorLevel(mb.BatPct))
+			zoneColor = levelColorC(menubar.BatColorLevel(mb.BatPct))
 		}
-		if colorHex != "" {
+		if zoneColor != nil {
 			for x := zone.Start; x < zone.End && x < buf.Width; x++ {
 				if x >= 0 && x < buf.Width {
-					buf.Cells[0][x].Fg = hexToColor(colorHex)
+					buf.Cells[0][x].Fg = zoneColor
 				}
 			}
 		}
@@ -574,7 +655,7 @@ func RenderMenuBar(buf *Buffer, mb *menubar.MenuBar, theme config.Theme, mode In
 	}
 	col = 0
 	for _, ch := range modeLabel {
-		buf.Set(modeX+col, 0, ch, modeFg, modeBg)
+		buf.SetCell(modeX+col, 0, ch, modeFC, modeBC, 0)
 		col += runewidth.RuneWidth(ch)
 	}
 
@@ -583,17 +664,19 @@ func RenderMenuBar(buf *Buffer, mb *menubar.MenuBar, theme config.Theme, mode In
 		positions := mb.MenuXPositions()
 		dropX := positions[mb.OpenIndex]
 		lines := mb.RenderDropdown()
+		ddFg := c.ActiveTitleFg
+		ddBg := c.ActiveBorderBg
 		for dy, line := range lines {
 			dcol := 0
 			for _, ch := range line {
-				buf.Set(dropX+dcol, 1+dy, ch, theme.ActiveTitleFg, theme.ActiveBorderBg)
+				buf.SetCell(dropX+dcol, 1+dy, ch, ddFg, ddBg, 0)
 				dcol++
 			}
 		}
 	}
 }
 
-// levelColor maps a color level name to a hex color.
+// levelColor maps a color level name to a hex color (used by overlays).
 func levelColor(level string) string {
 	switch level {
 	case "red":
@@ -604,6 +687,27 @@ func levelColor(level string) string {
 		return "#98C379"
 	default:
 		return ""
+	}
+}
+
+// Pre-parsed level colors (avoid hexToColor in hot path).
+var (
+	levelRed    = color.RGBA{R: 224, G: 108, B: 117, A: 255}
+	levelYellow = color.RGBA{R: 229, G: 192, B: 123, A: 255}
+	levelGreen  = color.RGBA{R: 152, G: 195, B: 121, A: 255}
+)
+
+// levelColorC maps a color level name to a pre-parsed color.Color.
+func levelColorC(level string) color.Color {
+	switch level {
+	case "red":
+		return levelRed
+	case "yellow":
+		return levelYellow
+	case "green":
+		return levelGreen
+	default:
+		return nil
 	}
 }
 
@@ -638,11 +742,12 @@ func RenderDock(buf *Buffer, d *dock.Dock, theme config.Theme, animations []Anim
 		return
 	}
 
+	c := theme.C()
 	y := buf.Height - 1
 
 	// Fill dock row with base dock colors
 	for x := 0; x < buf.Width; x++ {
-		buf.Set(x, y, ' ', theme.DockFg, theme.DockBg)
+		buf.SetCell(x, y, ' ', c.DockFg, c.DockBg, 0)
 	}
 
 	// Build pulse set from active animations
@@ -670,21 +775,21 @@ func RenderDock(buf *Buffer, d *dock.Dock, theme config.Theme, animations []Anim
 		if cell.Char == 0 {
 			continue
 		}
-		fg := theme.DockFg
-		bg := theme.DockBg
+		fg := c.DockFg
+		bg := c.DockBg
 		if cell.IconColor != "" {
-			fg = cell.IconColor // colorful icon
+			fg = hexToColor(cell.IconColor) // per-icon color still from hex
 		}
 		if cell.Minimized {
-			fg = theme.NotificationFg // distinct color for minimized items
-			if fg == "" {
-				fg = "#E5C07B" // yellow fallback
+			fg = c.NotificationFg
+			if fg == nil {
+				fg = levelYellow
 			}
 		}
 		if cell.Accent {
-			bg = theme.DockAccentBg
+			bg = c.DockAccentBg
 		}
-		buf.Set(x, y, cell.Char, fg, bg)
+		buf.SetCell(x, y, cell.Char, fg, bg, 0)
 	}
 }
 
@@ -1136,10 +1241,10 @@ func RenderExpose(wm *window.Manager, theme config.Theme) *Buffer {
 	fullWidth := wa.Width
 	fullHeight := wa.Height + wa.Y + wm.ReservedBottom()
 	if fullWidth <= 0 || fullHeight <= 0 {
-		return NewBuffer(1, 1, theme.DesktopBg)
+		return NewThemedBuffer(1, 1, theme)
 	}
 
-	buf := NewBuffer(fullWidth, fullHeight, theme.DesktopBg)
+	buf := NewThemedBuffer(fullWidth, fullHeight, theme)
 
 	windows := wm.Windows()
 	var visible []*window.Window
@@ -1234,10 +1339,10 @@ func RenderExposeTransition(wm *window.Manager, theme config.Theme, animations [
 	fullWidth := wa.Width
 	fullHeight := wa.Height + wa.Y + wm.ReservedBottom()
 	if fullWidth <= 0 || fullHeight <= 0 {
-		return NewBuffer(1, 1, theme.DesktopBg)
+		return NewThemedBuffer(1, 1, theme)
 	}
 
-	buf := NewBuffer(fullWidth, fullHeight, theme.DesktopBg)
+	buf := NewThemedBuffer(fullWidth, fullHeight, theme)
 
 	// Build animation lookup
 	animMap := make(map[string]*Animation)

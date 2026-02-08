@@ -321,28 +321,27 @@ func (mb *MenuBar) RightZones(totalWidth int) []RightSideZone {
 
 	var zones []RightSideZone
 	x := startX + 1 // skip leading space
-	if mb.ShowCPU {
-		s := FormatCPU(mb.CPUPct) + FormatCPUChart(mb.CPUHistory)
+	first := true
+	addZone := func(s, typ string) {
+		if !first {
+			x += 3 // " │ " separator
+		}
+		first = false
 		w := len([]rune(s))
-		zones = append(zones, RightSideZone{Start: x, End: x + w, Type: "cpu"})
-		x += w + 1 // +1 for space separator
+		zones = append(zones, RightSideZone{Start: x, End: x + w, Type: typ})
+		x += w
+	}
+	if mb.ShowCPU {
+		addZone(FormatCPU(mb.CPUPct)+FormatCPUChart(mb.CPUHistory), "cpu")
 	}
 	if mb.ShowMemory {
-		s := FormatMemory(mb.MemGB)
-		w := len([]rune(s))
-		zones = append(zones, RightSideZone{Start: x, End: x + w, Type: "mem"})
-		x += w + 1
+		addZone(FormatMemory(mb.MemGB), "mem")
 	}
 	if mb.ShowBattery && mb.BatPresent {
-		s := FormatBattery(mb.BatPct, mb.BatCharging)
-		w := len([]rune(s))
-		zones = append(zones, RightSideZone{Start: x, End: x + w, Type: "bat"})
-		x += w + 1
+		addZone(FormatBattery(mb.BatPct, mb.BatCharging), "bat")
 	}
 	if mb.ShowClock {
-		s := time.Now().Format("03:04 PM")
-		w := len([]rune(s))
-		zones = append(zones, RightSideZone{Start: x, End: x + w, Type: "clock"})
+		addZone(time.Now().Format("03:04 PM"), "clock")
 	}
 	return zones
 }
@@ -370,7 +369,7 @@ func (mb *MenuBar) renderRight() string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return " " + strings.Join(parts, " ") + " "
+	return " " + strings.Join(parts, " │ ") + " "
 }
 
 // ClockString returns the current time formatted for the menu bar.
@@ -425,7 +424,7 @@ func BatColorLevel(pct float64) string {
 	return "red"
 }
 
-const cpuChartWidth = 20
+const cpuChartWidth = 10
 
 // FormatCPUChart returns a fixed-width sparkline string from the CPU history.
 // Always returns exactly cpuChartWidth characters, padding with spaces on the left
@@ -433,9 +432,9 @@ const cpuChartWidth = 20
 func FormatCPUChart(history []float64) string {
 	blocks := []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
 	result := make([]rune, cpuChartWidth)
-	// Fill with spaces first
+	// Fill with baseline character so the chart area has a visible floor
 	for i := range result {
-		result[i] = ' '
+		result[i] = '▁'
 	}
 	// Right-align the actual data
 	start := cpuChartWidth - len(history)

@@ -211,11 +211,12 @@ func TestRenderFrameEmpty(t *testing.T) {
 	if buf.Width != 40 || buf.Height != 20 {
 		t.Errorf("buffer dimensions = %dx%d, want 40x20", buf.Width, buf.Height)
 	}
-	// Should be all desktop bg
+	// Should be all desktop bg (space or pattern char)
 	for y := 0; y < buf.Height; y++ {
 		for x := 0; x < buf.Width; x++ {
-			if buf.Cells[y][x].Char != ' ' {
-				t.Errorf("expected space at (%d,%d)", x, y)
+			ch := buf.Cells[y][x].Char
+			if ch != ' ' && ch != theme.DesktopPatternChar {
+				t.Errorf("unexpected char %q at (%d,%d)", ch, x, y)
 			}
 		}
 	}

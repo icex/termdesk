@@ -9,7 +9,9 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/lipgloss"
 	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/vt"
 	tea "charm.land/bubbletea/v2"
 	"github.com/icex/termdesk/internal/config"
 	"github.com/icex/termdesk/internal/dock"
@@ -33,6 +35,37 @@ var bufferPool = sync.Pool{}
 // runeLen returns the number of runes (display columns) in a string.
 func runeLen(s string) int {
 	return utf8.RuneCountInString(s)
+}
+
+// stampANSI parses an ANSI-styled string and writes its cells into the buffer
+// at position (x, y). Uses a vt emulator as an ANSI→cells parser.
+func stampANSI(buf *Buffer, x, y int, s string, width, height int) {
+	emu := vt.NewEmulator(width, height)
+	// VT emulator needs \r\n for proper line breaks; lipgloss outputs bare \n
+	s = strings.ReplaceAll(s, "\n", "\r\n")
+	emu.Write([]byte(s))
+	for row := 0; row < height; row++ {
+		for col := 0; col < width; col++ {
+			bx, by := x+col, y+row
+			if bx < 0 || bx >= buf.Width || by < 0 || by >= buf.Height {
+				continue
+			}
+			cell := emu.CellAt(col, row)
+			ch := ' '
+			if cell != nil && cell.Content != "" {
+				ch = []rune(cell.Content)[0]
+			}
+			var fg, bg color.Color
+			var attrs uint8
+			if cell != nil {
+				fg = cell.Style.Fg
+				bg = cell.Style.Bg
+				attrs = cell.Style.Attrs
+			}
+			buf.Cells[by][bx] = Cell{Char: ch, Fg: fg, Bg: bg, Attrs: attrs}
+		}
+	}
+	emu.Close()
 }
 
 // Cell represents a single terminal cell with character and style.
@@ -641,7 +674,7 @@ func RenderFrame(wm *window.Manager, theme config.Theme, terminals map[string]*t
 		// Use animated rect if available
 		if animRect, ok := animRects[w.ID]; ok {
 			origRect := w.Rect
-			// Clamp animated rect to valid range (easeOutBack can overshoot)
+			// Clamp animated rect to valid range (spring can overshoot)
 			if animRect.Width < 1 {
 				animRect.Width = 1
 			}
@@ -861,15 +894,18 @@ func RenderMenuBar(buf *Buffer, mb *menubar.MenuBar, theme config.Theme, mode In
 	if mb.IsOpen() {
 		positions := mb.MenuXPositions()
 		dropX := positions[mb.OpenIndex]
-		lines := mb.RenderDropdown()
-		ddFg := c.ActiveTitleFg
-		ddBg := c.ActiveBorderBg
-		for dy, line := range lines {
-			dcol := 0
-			for _, ch := range line {
-				buf.SetCell(dropX+dcol, 1+dy, ch, ddFg, ddBg, 0)
-				dcol++
-			}
+		// Use lipgloss-styled dropdown
+		borderFg := theme.ActiveBorderFg
+		ddBg := theme.ActiveBorderBg
+		ddFg := theme.ActiveTitleFg
+		hoverFg := "#1E1E2E"
+		hoverBg := "#61AFEF"
+		shortcutFg := "#888888"
+		styled := mb.RenderDropdownStyled(borderFg, ddBg, hoverFg, hoverBg, ddFg, shortcutFg)
+		if styled != "" {
+			w := lipgloss.Width(styled)
+			h := lipgloss.Height(styled)
+			stampANSI(buf, dropX, 1, styled, w, h)
 		}
 	}
 }
@@ -1031,103 +1067,91 @@ func RenderConfirmDialog(buf *Buffer, dialog *ConfirmDialog, theme config.Theme)
 		return
 	}
 
-	title := dialog.Title
-	boxW := runeLen(title) + 6
-	if boxW < 28 {
-		boxW = 28
-	}
-	boxH := 6
+	fgColor := lipgloss.Color(theme.ActiveTitleFg)
+	bgColor := lipgloss.Color(theme.ActiveTitleBg)
+	borderColor := lipgloss.Color(theme.ActiveBorderFg)
+	contentBg := lipgloss.Color(theme.ActiveBorderBg)
 
-	startX := (buf.Width - boxW) / 2
-	startY := (buf.Height - boxH) / 2
+	innerW := runeLen(dialog.Title) + 4
+	if innerW < 26 {
+		innerW = 26
+	}
+
+	// Title
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(fgColor).
+		Background(bgColor).
+		Width(innerW).
+		Align(lipgloss.Center)
+	titleStr := titleStyle.Render(dialog.Title)
+
+	// Separator
+	sepStyle := lipgloss.NewStyle().
+		Foreground(borderColor).
+		Background(contentBg).
+		Width(innerW)
+	sepStr := sepStyle.Render(strings.Repeat("─", innerW))
+
+	// Hint
+	hintStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#888888")).
+		Background(contentBg).
+		Width(innerW).
+		Align(lipgloss.Center)
+	hintStr := hintStyle.Render("Press Y or N")
+
+	// Buttons
+	activeBtnYes := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#1E1E2E")).
+		Background(lipgloss.Color("#98C379")).
+		Padding(0, 2)
+	activeBtnNo := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#1E1E2E")).
+		Background(lipgloss.Color("#E06C75")).
+		Padding(0, 2)
+	dimBtn := lipgloss.NewStyle().
+		Foreground(fgColor).
+		Background(contentBg).
+		Padding(0, 2)
+
+	var yesStr, noStr string
+	if dialog.Selected == 0 {
+		yesStr = activeBtnYes.Render("Yes")
+		noStr = dimBtn.Render("No")
+	} else {
+		yesStr = dimBtn.Render("Yes")
+		noStr = activeBtnNo.Render("No")
+	}
+	btnRow := lipgloss.JoinHorizontal(lipgloss.Top, yesStr, "  ", noStr)
+	btnRowStyle := lipgloss.NewStyle().
+		Background(contentBg).
+		Width(innerW).
+		Align(lipgloss.Center)
+	btnStr := btnRowStyle.Render(btnRow)
+
+	// Compose
+	inner := strings.Join([]string{titleStr, sepStr, hintStr, btnStr}, "\n")
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		BorderBackground(contentBg)
+	rendered := boxStyle.Render(inner)
+
+	w := lipgloss.Width(rendered)
+	h := lipgloss.Height(rendered)
+	startX := (buf.Width - w) / 2
+	startY := (buf.Height - h) / 2
 	if startX < 0 {
 		startX = 0
 	}
 	if startY < 0 {
 		startY = 0
 	}
-
-	fg := theme.ActiveTitleFg
-	bg := theme.ActiveBorderBg
-	titleBg := theme.ActiveTitleBg
-
-	// Top border
-	buf.Set(startX, startY, theme.BorderTopLeft, fg, titleBg)
-	for x := 1; x < boxW-1; x++ {
-		buf.Set(startX+x, startY, theme.BorderHorizontal, fg, titleBg)
-	}
-	buf.Set(startX+boxW-1, startY, theme.BorderTopRight, fg, titleBg)
-
-	// Title row with title bar background
-	buf.Set(startX, startY+1, theme.BorderVertical, fg, titleBg)
-	for x := 1; x < boxW-1; x++ {
-		buf.Set(startX+x, startY+1, ' ', fg, titleBg)
-	}
-	titleX := startX + (boxW-runeLen(title))/2
-	buf.SetString(titleX, startY+1, title, fg, titleBg)
-	buf.Set(startX+boxW-1, startY+1, theme.BorderVertical, fg, titleBg)
-
-	// Separator between title and content
-	buf.Set(startX, startY+2, theme.BorderVertical, fg, bg)
-	for x := 1; x < boxW-1; x++ {
-		buf.Set(startX+x, startY+2, theme.BorderHorizontal, fg, bg)
-	}
-	buf.Set(startX+boxW-1, startY+2, theme.BorderVertical, fg, bg)
-
-	// Hint row
-	hint := "Press Y or N"
-	buf.Set(startX, startY+3, theme.BorderVertical, fg, bg)
-	for x := 1; x < boxW-1; x++ {
-		buf.Set(startX+x, startY+3, ' ', fg, bg)
-	}
-	hintX := startX + (boxW-runeLen(hint))/2
-	buf.SetString(hintX, startY+3, hint, fg, bg)
-	buf.Set(startX+boxW-1, startY+3, theme.BorderVertical, fg, bg)
-
-	// Buttons row with styled buttons — highlight selected
-	selYesFg := "#1E1E2E"
-	selYesBg := "#98C379" // green (selected)
-	selNoFg := "#1E1E2E"
-	selNoBg := "#E06C75" // red (selected)
-	dimFg := fg
-	dimBg := bg // unselected = blends into dialog bg
-	buf.Set(startX, startY+4, theme.BorderVertical, fg, bg)
-	for x := 1; x < boxW-1; x++ {
-		buf.Set(startX+x, startY+4, ' ', fg, bg)
-	}
-	// Position buttons centered with gap
-	yesLabel := " Yes "
-	noLabel := "  No "
-	gap := boxW - 2 - len(yesLabel) - len(noLabel)
-	if gap < 4 {
-		gap = 4
-	}
-	yesX := startX + 1 + (gap / 3)
-	noX := startX + boxW - 1 - len(noLabel) - (gap / 3)
-	// Draw Yes button
-	yf, yb := dimFg, dimBg
-	if dialog.Selected == 0 {
-		yf, yb = selYesFg, selYesBg
-	}
-	for i, ch := range yesLabel {
-		buf.Set(yesX+i, startY+4, ch, yf, yb)
-	}
-	// Draw No button
-	nf, nb := dimFg, dimBg
-	if dialog.Selected == 1 {
-		nf, nb = selNoFg, selNoBg
-	}
-	for i, ch := range noLabel {
-		buf.Set(noX+i, startY+4, ch, nf, nb)
-	}
-	buf.Set(startX+boxW-1, startY+4, theme.BorderVertical, fg, bg)
-
-	// Bottom border
-	buf.Set(startX, startY+5, theme.BorderBottomLeft, fg, bg)
-	for x := 1; x < boxW-1; x++ {
-		buf.Set(startX+x, startY+5, theme.BorderHorizontal, fg, bg)
-	}
-	buf.Set(startX+boxW-1, startY+5, theme.BorderBottomRight, fg, bg)
+	stampANSI(buf, startX, startY, rendered, w, h)
 }
 
 // RenderRenameDialog draws a text input dialog for renaming a window.
@@ -1237,16 +1261,17 @@ func RenderModal(buf *Buffer, modal *ModalOverlay, theme config.Theme) {
 
 	// Resolve which lines to display (tabs or plain)
 	lines := modal.Lines
-	if modal.Tabs != nil && len(modal.Tabs) > 0 {
+	hasTabBar := modal.Tabs != nil && len(modal.Tabs) > 0
+	if hasTabBar {
 		if modal.ActiveTab >= len(modal.Tabs) {
 			modal.ActiveTab = 0
 		}
 		lines = modal.Tabs[modal.ActiveTab].Lines
 	}
 
-	// Calculate box dimensions across all tabs (so size doesn't jump)
+	// Calculate stable dimensions across all tabs
 	maxLineW := runeLen(modal.Title)
-	if modal.Tabs != nil {
+	if hasTabBar {
 		for _, tab := range modal.Tabs {
 			for _, line := range tab.Lines {
 				if w := runeLen(line); w > maxLineW {
@@ -1261,14 +1286,13 @@ func RenderModal(buf *Buffer, modal *ModalOverlay, theme config.Theme) {
 			}
 		}
 	}
-	boxW := maxLineW + 4 // 2 border + 2 padding
-	if boxW > buf.Width-4 {
-		boxW = buf.Width - 4
+	innerW := maxLineW + 2 // padding
+	if innerW > buf.Width-6 {
+		innerW = buf.Width - 6
 	}
 
-	// Calculate max lines across all tabs (stable box height)
 	maxTabLines := len(lines)
-	if modal.Tabs != nil {
+	if hasTabBar {
 		for _, tab := range modal.Tabs {
 			if len(tab.Lines) > maxTabLines {
 				maxTabLines = len(tab.Lines)
@@ -1284,25 +1308,6 @@ func RenderModal(buf *Buffer, modal *ModalOverlay, theme config.Theme) {
 		visibleLines = maxTabLines
 	}
 
-	hasTabBar := modal.Tabs != nil && len(modal.Tabs) > 0
-	extraRows := 0
-	if hasTabBar {
-		extraRows = 1 // tab bar row
-	}
-	boxH := visibleLines + 4 + extraRows // border + title + sep + [tabs] + lines + border
-	startX := (buf.Width - boxW) / 2
-	startY := (buf.Height - boxH) / 2
-	if startX < 0 {
-		startX = 0
-	}
-	if startY < 0 {
-		startY = 0
-	}
-
-	fg := theme.ActiveTitleFg
-	bg := theme.ActiveTitleBg
-	innerW := boxW - 2
-
 	// Clamp scroll
 	maxScroll := len(lines) - visibleLines
 	if maxScroll < 0 {
@@ -1312,82 +1317,119 @@ func RenderModal(buf *Buffer, modal *ModalOverlay, theme config.Theme) {
 		modal.ScrollY = maxScroll
 	}
 
-	// Top border
-	buf.Set(startX, startY, theme.BorderTopLeft, fg, bg)
-	for x := 1; x < boxW-1; x++ {
-		buf.Set(startX+x, startY, theme.BorderHorizontal, fg, bg)
-	}
-	buf.Set(startX+boxW-1, startY, theme.BorderTopRight, fg, bg)
+	// Theme colors for lipgloss
+	fgColor := lipgloss.Color(theme.ActiveTitleFg)
+	bgColor := lipgloss.Color(theme.ActiveTitleBg)
+	borderColor := lipgloss.Color(theme.ActiveBorderFg)
 
-	// Title row
-	buf.Set(startX, startY+1, theme.BorderVertical, fg, bg)
-	for x := 1; x < boxW-1; x++ {
-		buf.Set(startX+x, startY+1, ' ', fg, bg)
-	}
-	titleX := startX + (boxW-runeLen(modal.Title))/2
-	buf.SetString(titleX, startY+1, modal.Title, fg, bg)
-	buf.Set(startX+boxW-1, startY+1, theme.BorderVertical, fg, bg)
+	// Title — centered, bold
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(fgColor).
+		Background(bgColor).
+		Width(innerW).
+		Align(lipgloss.Center)
+	titleStr := titleStyle.Render(modal.Title)
 
-	// Separator after title
-	buf.Set(startX, startY+2, theme.BorderVertical, fg, bg)
-	for x := 1; x < boxW-1; x++ {
-		buf.Set(startX+x, startY+2, theme.BorderHorizontal, fg, bg)
-	}
-	buf.Set(startX+boxW-1, startY+2, theme.BorderVertical, fg, bg)
-
-	contentStartY := startY + 3
+	// Separator
+	sepStyle := lipgloss.NewStyle().
+		Foreground(borderColor).
+		Background(bgColor).
+		Width(innerW)
+	sepStr := sepStyle.Render(strings.Repeat("─", innerW))
 
 	// Tab bar (if tabbed)
+	tabBarStr := ""
 	if hasTabBar {
-		tabY := contentStartY
-		buf.Set(startX, tabY, theme.BorderVertical, fg, bg)
-		for x := 1; x < boxW-1; x++ {
-			buf.Set(startX+x, tabY, ' ', fg, bg)
-		}
-		buf.Set(startX+boxW-1, tabY, theme.BorderVertical, fg, bg)
+		activeTabStyle := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#1E1E2E")).
+			Background(lipgloss.Color("#61AFEF")).
+			Padding(0, 1)
+		inactiveTabStyle := lipgloss.NewStyle().
+			Foreground(fgColor).
+			Background(bgColor).
+			Padding(0, 1)
 
-		// Render tab labels
-		tabActiveFg := "#1E1E2E"
-		tabActiveBg := "#61AFEF"
-		tx := startX + 2
+		var tabs []string
 		for i, tab := range modal.Tabs {
-			label := " " + tab.Title + " "
 			if i == modal.ActiveTab {
-				buf.SetString(tx, tabY, label, tabActiveFg, tabActiveBg)
+				tabs = append(tabs, activeTabStyle.Render(tab.Title))
 			} else {
-				buf.SetString(tx, tabY, label, fg, bg)
+				tabs = append(tabs, inactiveTabStyle.Render(tab.Title))
 			}
-			tx += runeLen(label) + 1
 		}
-		contentStartY++
+		row := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
+		// Pad to full width
+		tabRowStyle := lipgloss.NewStyle().
+			Background(bgColor).
+			Width(innerW)
+		tabBarStr = tabRowStyle.Render(row)
 	}
 
 	// Content lines
+	contentStyle := lipgloss.NewStyle().
+		Foreground(fgColor).
+		Background(bgColor).
+		Width(innerW)
+
+	var contentLines []string
 	for i := 0; i < visibleLines; i++ {
 		lineIdx := modal.ScrollY + i
-		y := contentStartY + i
-		buf.Set(startX, y, theme.BorderVertical, fg, bg)
-		for x := 1; x < boxW-1; x++ {
-			buf.Set(startX+x, y, ' ', fg, bg)
-		}
-		buf.Set(startX+boxW-1, y, theme.BorderVertical, fg, bg)
 		if lineIdx < len(lines) {
 			line := lines[lineIdx]
 			lineRunes := []rune(line)
 			if len(lineRunes) > innerW {
 				line = string(lineRunes[:innerW])
 			}
-			buf.SetString(startX+2, y, line, fg, bg)
+			contentLines = append(contentLines, contentStyle.Render(line))
+		} else {
+			contentLines = append(contentLines, contentStyle.Render(""))
 		}
 	}
+	contentStr := strings.Join(contentLines, "\n")
 
-	// Bottom border
-	botY := contentStartY + visibleLines
-	buf.Set(startX, botY, theme.BorderBottomLeft, fg, bg)
-	for x := 1; x < boxW-1; x++ {
-		buf.Set(startX+x, botY, theme.BorderHorizontal, fg, bg)
+	// Footer with navigation hints
+	footerText := ""
+	if hasTabBar {
+		footerText = " Tab \u2190\u2192 navigate \u2502 \u2191\u2193 scroll \u2502 Esc close "
+	} else {
+		footerText = " \u2191\u2193 scroll \u2502 Esc close "
 	}
-	buf.Set(startX+boxW-1, botY, theme.BorderBottomRight, fg, bg)
+	footerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#888888")).
+		Background(bgColor).
+		Width(innerW).
+		Align(lipgloss.Center)
+	footerStr := footerStyle.Render(footerText)
+
+	// Compose inner content
+	parts := []string{titleStr, sepStr}
+	if tabBarStr != "" {
+		parts = append(parts, tabBarStr)
+	}
+	parts = append(parts, contentStr, footerStr)
+	inner := strings.Join(parts, "\n")
+
+	// Wrap in rounded border
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		BorderBackground(bgColor)
+	rendered := boxStyle.Render(inner)
+
+	// Stamp into buffer centered
+	w := lipgloss.Width(rendered)
+	h := lipgloss.Height(rendered)
+	startX := (buf.Width - w) / 2
+	startY := (buf.Height - h) / 2
+	if startX < 0 {
+		startX = 0
+	}
+	if startY < 0 {
+		startY = 0
+	}
+	stampANSI(buf, startX, startY, rendered, w, h)
 }
 
 // renderExposeMiniWindow draws a single mini window preview at the given position.
@@ -1668,8 +1710,7 @@ func RenderExposeTransition(wm *window.Manager, theme config.Theme, animations [
 func renderExposeTransitionWindow(buf *Buffer, theme config.Theme, w *window.Window, animMap map[string]*Animation, exposeFallback map[string]geometry.Rect, winNum int) {
 	r := w.Rect
 	if a, ok := animMap[w.ID]; ok {
-		t := easeOutCubic(a.Progress)
-		r = interpolateRect(a.StartRect, a.EndRect, t)
+		r = a.currentRect()
 	} else if fb, ok := exposeFallback[w.ID]; ok {
 		r = fb
 	}

@@ -218,6 +218,40 @@ func (m *Manager) CycleBackward() {
 	m.FocusWindow(visible[prevIdx].ID)
 }
 
+// ClampAllWindows repositions and resizes all windows to fit within the
+// current work area. Called after a terminal resize to prevent windows
+// from being off-screen.
+func (m *Manager) ClampAllWindows() {
+	wa := m.WorkArea()
+	for _, w := range m.windows {
+		if w.Minimized {
+			continue
+		}
+		if w.IsMaximized() {
+			w.Rect = wa
+			continue
+		}
+		if w.Rect.Width > wa.Width {
+			w.Rect.Width = wa.Width
+		}
+		if w.Rect.Height > wa.Height {
+			w.Rect.Height = wa.Height
+		}
+		if w.Rect.X+w.Rect.Width > wa.X+wa.Width {
+			w.Rect.X = wa.X + wa.Width - w.Rect.Width
+		}
+		if w.Rect.Y+w.Rect.Height > wa.Y+wa.Height {
+			w.Rect.Y = wa.Y + wa.Height - w.Rect.Height
+		}
+		if w.Rect.X < wa.X {
+			w.Rect.X = wa.X
+		}
+		if w.Rect.Y < wa.Y {
+			w.Rect.Y = wa.Y
+		}
+	}
+}
+
 func (m *Manager) visibleWindows() []*Window {
 	var result []*Window
 	for _, w := range m.windows {

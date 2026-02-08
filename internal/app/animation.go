@@ -4,6 +4,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/charmbracelet/harmonica"
 	"github.com/icex/termdesk/pkg/geometry"
 
 	tea "charm.land/bubbletea/v2"
@@ -28,16 +29,26 @@ const (
 )
 
 // Animation represents an in-progress visual animation.
+// Window/expose animations use spring physics (harmonica).
+// Dock pulse uses time-based progress (not a rect animation).
 type Animation struct {
 	Type      AnimationType
-	WindowID  string         // which window is animating (or "" for dock)
-	DockIndex int            // dock item index for dock pulse
-	StartRect geometry.Rect  // starting position/size
-	EndRect   geometry.Rect  // target position/size
+	WindowID  string        // which window is animating (or "" for dock)
+	DockIndex int           // dock item index for dock pulse
+	StartRect geometry.Rect // original rect (kept for minimize recovery)
+	EndRect   geometry.Rect // target position/size
+
+	// Spring state per dimension (used for window animations)
+	X, Y, W, H     float64
+	VX, VY, VW, VH float64
+	Spring          harmonica.Spring
+
+	// Time-based fields (used only for dock pulse)
 	StartTime time.Time
 	Duration  time.Duration
-	Progress  float64        // 0.0 to 1.0
-	Done      bool
+	Progress  float64 // 0.0 to 1.0 (dock pulse only)
+
+	Done bool
 }
 
 // AnimationTickMsg triggers animation frame updates.
@@ -46,12 +57,32 @@ type AnimationTickMsg struct {
 }
 
 const (
-	animFrameRate  = 16 * time.Millisecond  // ~60fps
-	animDuration   = 200 * time.Millisecond // window animations
-	exposeDuration = 350 * time.Millisecond // exposé transitions (smoother)
-	dockPulseDur   = 400 * time.Millisecond // dock pulse
+	animFrameRate   = 16 * time.Millisecond  // ~60fps
+	dockPulseDur    = 400 * time.Millisecond // dock pulse
 	cursorBlinkRate = 500 * time.Millisecond // cursor blink interval
 )
+
+// Spring presets for different animation feels.
+var (
+	springSnappy = harmonica.NewSpring(harmonica.FPS(60), 12.0, 1.0) // critically damped, fast
+	springBouncy = harmonica.NewSpring(harmonica.FPS(60), 9.0, 0.6)  // slight bounce, quick
+	springSmooth = harmonica.NewSpring(harmonica.FPS(60), 10.0, 0.9) // fast settle
+	springExpose = harmonica.NewSpring(harmonica.FPS(60), 11.0, 1.0) // snappy expose
+)
+
+// springForType returns the appropriate spring for an animation type.
+func springForType(typ AnimationType) harmonica.Spring {
+	switch typ {
+	case AnimOpen:
+		return springBouncy
+	case AnimExpose, AnimExposeExit:
+		return springExpose
+	case AnimTile:
+		return springSmooth
+	default:
+		return springSnappy
+	}
+}
 
 // CursorBlinkMsg triggers cursor blink state toggle.
 type CursorBlinkMsg struct{}
@@ -70,37 +101,25 @@ func tickAnimation() tea.Cmd {
 	})
 }
 
-// easeOutCubic provides a smooth deceleration curve.
-func easeOutCubic(t float64) float64 {
-	t -= 1
-	return t*t*t + 1
+// settled returns true when the spring animation is close enough to the target.
+func settled(a *Animation) bool {
+	const posThresh = 0.5
+	const velThresh = 0.1
+	return math.Abs(a.X-float64(a.EndRect.X)) < posThresh &&
+		math.Abs(a.Y-float64(a.EndRect.Y)) < posThresh &&
+		math.Abs(a.W-float64(a.EndRect.Width)) < posThresh &&
+		math.Abs(a.H-float64(a.EndRect.Height)) < posThresh &&
+		math.Abs(a.VX) < velThresh && math.Abs(a.VY) < velThresh &&
+		math.Abs(a.VW) < velThresh && math.Abs(a.VH) < velThresh
 }
 
-// easeInOutCubic provides a smooth acceleration + deceleration curve.
-func easeInOutCubic(t float64) float64 {
-	if t < 0.5 {
-		return 4 * t * t * t
-	}
-	return 1 - math.Pow(-2*t+2, 3)/2
-}
-
-// easeOutBack provides an overshoot-then-settle curve (bouncy feel).
-func easeOutBack(t float64) float64 {
-	c1 := 1.70158
-	c3 := c1 + 1
-	return 1 + c3*math.Pow(t-1, 3) + c1*math.Pow(t-1, 2)
-}
-
-// interpolateRect linearly interpolates between two rects.
-func interpolateRect(from, to geometry.Rect, t float64) geometry.Rect {
-	lerp := func(a, b int) int {
-		return a + int(float64(b-a)*t)
-	}
+// currentRect returns the animation's current interpolated rect from spring state.
+func (a *Animation) currentRect() geometry.Rect {
 	return geometry.Rect{
-		X:      lerp(from.X, to.X),
-		Y:      lerp(from.Y, to.Y),
-		Width:  lerp(from.Width, to.Width),
-		Height: lerp(from.Height, to.Height),
+		X:      int(math.Round(a.X)),
+		Y:      int(math.Round(a.Y)),
+		Width:  max(1, int(math.Round(a.W))),
+		Height: max(1, int(math.Round(a.H))),
 	}
 }
 
@@ -112,19 +131,33 @@ func (m *Model) updateAnimations(now time.Time) bool {
 		if a.Done {
 			continue
 		}
-		elapsed := now.Sub(a.StartTime)
-		raw := float64(elapsed) / float64(a.Duration)
-		if raw >= 1.0 {
-			a.Progress = 1.0
+
+		// Dock pulse: time-based progress (not a rect animation)
+		if a.Type == AnimDockPulse {
+			elapsed := now.Sub(a.StartTime)
+			raw := float64(elapsed) / float64(a.Duration)
+			if raw >= 1.0 {
+				a.Progress = 1.0
+				a.Done = true
+			} else {
+				// Smooth deceleration for pulse
+				t := raw - 1
+				a.Progress = t*t*t + 1
+				hasActive = true
+			}
+			continue
+		}
+
+		// Spring physics update for all other animations
+		a.X, a.VX = a.Spring.Update(a.X, a.VX, float64(a.EndRect.X))
+		a.Y, a.VY = a.Spring.Update(a.Y, a.VY, float64(a.EndRect.Y))
+		a.W, a.VW = a.Spring.Update(a.W, a.VW, float64(a.EndRect.Width))
+		a.H, a.VH = a.Spring.Update(a.H, a.VH, float64(a.EndRect.Height))
+
+		if settled(a) {
 			a.Done = true
 			m.finalizeAnimation(a)
 		} else {
-			switch a.Type {
-			case AnimExpose, AnimExposeExit:
-				a.Progress = easeInOutCubic(raw)
-			default:
-				a.Progress = easeOutCubic(raw)
-			}
 			hasActive = true
 		}
 	}
@@ -176,11 +209,7 @@ func (m *Model) finalizeAnimation(a *Animation) {
 func (m *Model) animatedRect(windowID string) (geometry.Rect, bool) {
 	for _, a := range m.animations {
 		if a.WindowID == windowID && !a.Done {
-			t := a.Progress
-			if a.Type == AnimOpen {
-				t = easeOutBack(a.Progress) // bouncy open
-			}
-			return interpolateRect(a.StartRect, a.EndRect, t), true
+			return a.currentRect(), true
 		}
 	}
 	return geometry.Rect{}, false
@@ -206,31 +235,37 @@ func (m *Model) dockPulseProgress(dockIdx int) float64 {
 	return -1
 }
 
-// startWindowAnimation creates a new animation for a window transition.
+// startWindowAnimation creates a new spring-based animation for a window transition.
 func (m *Model) startWindowAnimation(windowID string, typ AnimationType, from, to geometry.Rect) {
 	m.animations = append(m.animations, Animation{
 		Type:      typ,
 		WindowID:  windowID,
 		StartRect: from,
 		EndRect:   to,
-		StartTime: time.Now(),
-		Duration:  animDuration,
+		X:         float64(from.X),
+		Y:         float64(from.Y),
+		W:         float64(from.Width),
+		H:         float64(from.Height),
+		Spring:    springForType(typ),
 	})
 }
 
-// startExposeAnimation creates an animation with the longer exposé duration.
+// startExposeAnimation creates a spring-based animation with the expose spring preset.
 func (m *Model) startExposeAnimation(windowID string, typ AnimationType, from, to geometry.Rect) {
 	m.animations = append(m.animations, Animation{
 		Type:      typ,
 		WindowID:  windowID,
 		StartRect: from,
 		EndRect:   to,
-		StartTime: time.Now(),
-		Duration:  exposeDuration,
+		X:         float64(from.X),
+		Y:         float64(from.Y),
+		W:         float64(from.Width),
+		H:         float64(from.Height),
+		Spring:    springExpose,
 	})
 }
 
-// startDockPulse starts a dock item pulse animation.
+// startDockPulse starts a dock item pulse animation (time-based, not spring).
 func (m *Model) startDockPulse(dockIdx int) {
 	m.animations = append(m.animations, Animation{
 		Type:      AnimDockPulse,

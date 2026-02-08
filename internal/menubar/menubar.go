@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/icex/termdesk/internal/config"
 )
 
@@ -306,6 +307,131 @@ func (mb *MenuBar) RenderDropdown() []string {
 
 	lines = append(lines, "└"+strings.Repeat("─", maxW-2)+"┘")
 	return lines
+}
+
+// DropdownDimensions returns the width and height of the dropdown for the open menu.
+// Used by the renderer to know the stampANSI target size.
+func (mb *MenuBar) DropdownDimensions() (int, int) {
+	if mb.OpenIndex < 0 {
+		return 0, 0
+	}
+	menu := mb.Menus[mb.OpenIndex]
+	if len(menu.Items) == 0 {
+		return 0, 0
+	}
+
+	maxW := 0
+	for _, item := range menu.Items {
+		if isSeparator(item) {
+			continue
+		}
+		w := len([]rune(item.Label)) + 2
+		if item.Shortcut != "" {
+			w += len(item.Shortcut) + 2
+		}
+		if w > maxW {
+			maxW = w
+		}
+	}
+	maxW += 2 // padding
+
+	// height = items + 2 (top/bottom border)
+	return maxW + 2, len(menu.Items) + 2
+}
+
+// RenderDropdownStyled returns a lipgloss-styled dropdown string.
+func (mb *MenuBar) RenderDropdownStyled(borderFg, bgColor, hoverFg, hoverBg, normalFg, shortcutFg string) string {
+	if mb.OpenIndex < 0 {
+		return ""
+	}
+	menu := mb.Menus[mb.OpenIndex]
+	if len(menu.Items) == 0 {
+		return ""
+	}
+
+	// Calculate inner width (exclude separators)
+	maxInnerW := 0
+	for _, item := range menu.Items {
+		if isSeparator(item) {
+			continue
+		}
+		w := len([]rune(item.Label)) + 2
+		if item.Shortcut != "" {
+			w += len(item.Shortcut) + 2
+		}
+		if w > maxInnerW {
+			maxInnerW = w
+		}
+	}
+	maxInnerW += 2 // extra padding
+
+	normalStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(normalFg)).
+		Background(lipgloss.Color(bgColor))
+
+	hoverStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(hoverFg)).
+		Background(lipgloss.Color(hoverBg)).
+		Bold(true)
+
+	shortcutStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(shortcutFg)).
+		Background(lipgloss.Color(bgColor))
+
+	sepStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(borderFg)).
+		Background(lipgloss.Color(bgColor)).
+		Width(maxInnerW)
+
+	var rows []string
+	for i, item := range menu.Items {
+		if isSeparator(item) {
+			rows = append(rows, sepStyle.Render(strings.Repeat("─", maxInnerW)))
+			continue
+		}
+
+		isHover := i == mb.HoverIndex && !item.Disabled
+		label := " " + item.Label
+		if isHover {
+			label = ">" + item.Label
+		}
+
+		if item.Shortcut != "" {
+			gap := maxInnerW - len([]rune(label)) - len(item.Shortcut) - 1
+			if gap < 1 {
+				gap = 1
+			}
+			if isHover {
+				content := label + strings.Repeat(" ", gap) + item.Shortcut
+				for len([]rune(content)) < maxInnerW {
+					content += " "
+				}
+				rows = append(rows, hoverStyle.Render(content))
+			} else {
+				labelPart := label + strings.Repeat(" ", gap)
+				rows = append(rows, normalStyle.Render(labelPart)+shortcutStyle.Render(item.Shortcut+strings.Repeat(" ", maxInnerW-len([]rune(labelPart))-len(item.Shortcut))))
+			}
+		} else {
+			content := label
+			for len([]rune(content)) < maxInnerW {
+				content += " "
+			}
+			if isHover {
+				rows = append(rows, hoverStyle.Render(content))
+			} else {
+				rows = append(rows, normalStyle.Render(content))
+			}
+		}
+	}
+
+	inner := strings.Join(rows, "\n")
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(borderFg)).
+		BorderBackground(lipgloss.Color(bgColor))
+
+	return boxStyle.Render(inner)
 }
 
 // RightSideZone describes a clickable zone on the right side of the menu bar.

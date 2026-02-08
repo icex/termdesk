@@ -273,6 +273,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.wm.SetBounds(msg.Width, msg.Height)
 		m.wm.SetReserved(1, 1) // 1 row for menu bar at top, 1 for dock at bottom
+		m.wm.ClampAllWindows()
 		m.menuBar.SetWidth(msg.Width)
 		m.dock.SetWidth(msg.Width)
 		m.ready = true

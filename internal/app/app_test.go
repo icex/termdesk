@@ -11,10 +11,18 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// completeAnimations sends a tick far enough in the future to finish all animations.
+// completeAnimations sends enough ticks to settle all spring animations.
 func completeAnimations(m Model) Model {
-	updated, _ := m.Update(AnimationTickMsg{Time: time.Now().Add(time.Second)})
-	return updated.(Model)
+	now := time.Now()
+	for i := 0; i < 120; i++ { // ~2 seconds at 60fps
+		now = now.Add(16 * time.Millisecond)
+		updated, _ := m.Update(AnimationTickMsg{Time: now})
+		m = updated.(Model)
+		if !m.hasActiveAnimations() {
+			break
+		}
+	}
+	return m
 }
 
 func setupReadyModel() Model {

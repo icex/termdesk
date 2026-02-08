@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -73,7 +74,7 @@ func NewServer(name string, cols, rows int) (*Server, error) {
 	cmd.Stdin = tty
 	cmd.Stdout = tty
 	cmd.Stderr = tty
-	cmd.Env = append(os.Environ(), "COLORTERM=truecolor")
+	cmd.Env = buildAppEnv()
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setsid:  true,
 		Setctty: true,
@@ -255,4 +256,29 @@ func (s *Server) cleanup() {
 	s.ptmx.Close()
 	os.Remove(s.sockPath)
 	os.Remove(s.pidPath)
+}
+
+// buildAppEnv creates a sanitized environment for the child --app process.
+// Terminal-specific env vars (TERM_PROGRAM, KITTY_*, ITERM_*, etc.) are
+// removed so that Bubble Tea v2 doesn't enable features like synchronized
+// output or Kitty keyboard protocol that don't work through the PTY proxy.
+func buildAppEnv() []string {
+	skip := map[string]bool{
+		"TERM": true, "COLORTERM": true,
+		"TERM_PROGRAM": true, "TERM_PROGRAM_VERSION": true,
+		"WT_SESSION": true, "VTE_VERSION": true,
+	}
+	var env []string
+	for _, e := range os.Environ() {
+		k, _, _ := strings.Cut(e, "=")
+		if skip[k] || strings.HasPrefix(k, "KITTY_") || strings.HasPrefix(k, "ITERM_") {
+			continue
+		}
+		env = append(env, e)
+	}
+	env = append(env,
+		"TERM=xterm-256color",
+		"COLORTERM=truecolor",
+	)
+	return env
 }

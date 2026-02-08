@@ -66,10 +66,15 @@ func main() {
 // runApp runs the Bubble Tea app directly (used by the server on a slave PTY).
 func runApp() {
 	m := app.New()
-	// Force TrueColor: colorprofile.Detect() may fail to detect truecolor
-	// outside tmux (missing $COLORTERM, no tmux info to query). All modern
-	// terminals accept RGB SGR sequences even if they internally quantize.
-	p := tea.NewProgram(m, tea.WithColorProfile(colorprofile.TrueColor))
+	// Force TrueColor and provide a sanitized environment for Bubble Tea.
+	// The app runs behind a PTY proxy (session system), so BT v2 features
+	// that require direct terminal communication (synchronized output mode
+	// 2026, Kitty keyboard queries) don't work reliably. Setting SSH_TTY
+	// tells BT we're behind a PTY proxy — it skips those features.
+	p := tea.NewProgram(m,
+		tea.WithColorProfile(colorprofile.TrueColor),
+		tea.WithEnvironment(append(os.Environ(), "SSH_TTY=/dev/pts/proxy")),
+	)
 	m.SetProgram(p)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "termdesk: %v\n", err)

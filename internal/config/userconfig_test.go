@@ -164,3 +164,90 @@ func TestLoadUserConfigMissing(t *testing.T) {
 		t.Error("theme should not be empty")
 	}
 }
+
+func TestDefaultKeyBindings(t *testing.T) {
+	kb := DefaultKeyBindings()
+	if kb.Prefix != "ctrl+g" {
+		t.Errorf("default prefix = %q, want ctrl+g", kb.Prefix)
+	}
+	if kb.Quit != "q" {
+		t.Errorf("default quit = %q, want q", kb.Quit)
+	}
+	if kb.NewTerminal != "n" {
+		t.Errorf("default new_terminal = %q, want n", kb.NewTerminal)
+	}
+}
+
+func TestParseKeybindingsSection(t *testing.T) {
+	input := `theme = "retro"
+icons_only = true
+
+[keybindings]
+prefix = "ctrl+]"
+quit = "x"
+snap_left = "a"
+`
+	cfg := DefaultUserConfig()
+	parseConfig(&cfg, input)
+
+	if cfg.Theme != "retro" {
+		t.Errorf("theme = %q, want retro", cfg.Theme)
+	}
+	if !cfg.IconsOnly {
+		t.Error("icons_only should be true")
+	}
+	if cfg.Keys.Prefix != "ctrl+]" {
+		t.Errorf("prefix = %q, want ctrl+]", cfg.Keys.Prefix)
+	}
+	if cfg.Keys.Quit != "x" {
+		t.Errorf("quit = %q, want x", cfg.Keys.Quit)
+	}
+	if cfg.Keys.SnapLeft != "a" {
+		t.Errorf("snap_left = %q, want a", cfg.Keys.SnapLeft)
+	}
+	// Non-overridden keys should keep defaults
+	if cfg.Keys.NewTerminal != "n" {
+		t.Errorf("new_terminal = %q, want n (default)", cfg.Keys.NewTerminal)
+	}
+}
+
+func TestParseKeybindingsPartial(t *testing.T) {
+	// Only override prefix, rest should stay default
+	input := `[keybindings]
+prefix = "ctrl+b"
+`
+	cfg := DefaultUserConfig()
+	parseConfig(&cfg, input)
+
+	if cfg.Keys.Prefix != "ctrl+b" {
+		t.Errorf("prefix = %q, want ctrl+b", cfg.Keys.Prefix)
+	}
+	// All other keys should be default
+	defaults := DefaultKeyBindings()
+	if cfg.Keys.Quit != defaults.Quit {
+		t.Errorf("quit should remain default %q, got %q", defaults.Quit, cfg.Keys.Quit)
+	}
+	if cfg.Keys.Help != defaults.Help {
+		t.Errorf("help should remain default %q, got %q", defaults.Help, cfg.Keys.Help)
+	}
+}
+
+func TestParseUnknownSectionIgnored(t *testing.T) {
+	input := `theme = "modern"
+
+[unknown_section]
+foo = "bar"
+
+[keybindings]
+prefix = "ctrl+x"
+`
+	cfg := DefaultUserConfig()
+	parseConfig(&cfg, input)
+
+	if cfg.Theme != "modern" {
+		t.Errorf("theme = %q, want modern", cfg.Theme)
+	}
+	if cfg.Keys.Prefix != "ctrl+x" {
+		t.Errorf("prefix = %q, want ctrl+x", cfg.Keys.Prefix)
+	}
+}

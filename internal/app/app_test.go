@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/icex/termdesk/internal/config"
 	"github.com/icex/termdesk/internal/window"
 	"github.com/icex/termdesk/pkg/geometry"
 
@@ -1007,5 +1008,205 @@ func TestPtyClosedClosesWindow(t *testing.T) {
 	model = completeAnimations(model)
 	if model.wm.Count() != 0 {
 		t.Errorf("expected 0 windows after close animation, got %d", model.wm.Count())
+	}
+}
+
+// ── Prefix system tests ──
+
+func TestPrefixKeyActivatesPending(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	m.inputMode = ModeTerminal
+
+	// Press Ctrl+G (prefix key, default)
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'g', Mod: tea.ModCtrl}))
+	model := updated.(Model)
+
+	if !model.prefixPending {
+		t.Error("expected prefixPending to be true after prefix key")
+	}
+	if model.inputMode != ModeTerminal {
+		t.Error("should still be in Terminal mode while prefix pending")
+	}
+}
+
+func TestPrefixEscExitsTerminalMode(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	m.inputMode = ModeTerminal
+	m.prefixPending = true
+
+	// Press Esc after prefix
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	model := updated.(Model)
+
+	if model.inputMode != ModeNormal {
+		t.Error("expected Normal mode after prefix + Esc")
+	}
+	if model.prefixPending {
+		t.Error("prefixPending should be cleared")
+	}
+}
+
+func TestPrefixQuitShowsDialog(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	m.inputMode = ModeTerminal
+	m.prefixPending = true
+
+	// Press 'q' after prefix
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"}))
+	model := updated.(Model)
+
+	if model.confirmClose == nil {
+		t.Error("expected quit confirm dialog after prefix + q")
+	}
+	if model.inputMode != ModeNormal {
+		t.Error("should switch to Normal mode for dialog")
+	}
+}
+
+func TestPrefixSnapLeftStaysInTerminal(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	m.inputMode = ModeTerminal
+	m.prefixPending = true
+
+	// Press 'h' after prefix (snap left — geometry action)
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'h', Text: "h"}))
+	model := updated.(Model)
+
+	// Should stay in Terminal mode (geometry action)
+	if model.inputMode != ModeTerminal {
+		t.Error("expected to stay in Terminal mode after prefix + snap_left")
+	}
+}
+
+func TestGlobalHotkeysBlockedInTerminal(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	m.inputMode = ModeTerminal
+
+	// Press F1 directly — should NOT open help in Terminal mode
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyF1}))
+	model := updated.(Model)
+
+	if model.modal != nil {
+		t.Error("F1 should NOT trigger help overlay in Terminal mode without prefix")
+	}
+}
+
+func TestGlobalHotkeysWorkInNormal(t *testing.T) {
+	m := setupReadyModel()
+
+	// F1 in Normal mode should open help
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyF1}))
+	model := updated.(Model)
+
+	if model.modal == nil {
+		t.Error("F1 should trigger help overlay in Normal mode")
+	}
+}
+
+func TestPrefixHelpOpensOverlay(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	m.inputMode = ModeTerminal
+	m.prefixPending = true
+
+	// Press F1 after prefix
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyF1}))
+	model := updated.(Model)
+
+	if model.modal == nil {
+		t.Error("expected help overlay after prefix + F1")
+	}
+	if model.inputMode != ModeNormal {
+		t.Error("should switch to Normal mode for help overlay")
+	}
+}
+
+func TestDoublePrefixForwardsKey(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	m.inputMode = ModeTerminal
+	m.prefixPending = true
+
+	// Press Ctrl+G again after prefix — should forward to terminal and stay in Terminal mode
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'g', Mod: tea.ModCtrl}))
+	model := updated.(Model)
+
+	if model.prefixPending {
+		t.Error("prefixPending should be cleared after double-prefix")
+	}
+	if model.inputMode != ModeTerminal {
+		t.Error("should stay in Terminal mode after double-prefix")
+	}
+}
+
+func TestF2ExitsTerminalMode(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	m.inputMode = ModeTerminal
+
+	// F2 always exits Terminal mode (hardcoded escape hatch)
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyF2}))
+	model := updated.(Model)
+
+	if model.inputMode != ModeNormal {
+		t.Error("F2 should exit Terminal mode")
+	}
+}
+
+func TestCustomPrefix(t *testing.T) {
+	m := setupReadyModel()
+	m.openDemoWindow()
+	// Override prefix to Ctrl+]
+	m.keybindings.Prefix = "ctrl+]"
+	m.actionMap = BuildActionMap(m.keybindings)
+	m.inputMode = ModeTerminal
+
+	// Default prefix (Ctrl+G) should NOT activate prefix
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'g', Mod: tea.ModCtrl}))
+	model := updated.(Model)
+	if model.prefixPending {
+		t.Error("Ctrl+G should not activate prefix when custom prefix is Ctrl+]")
+	}
+
+	// Restore Terminal mode (no terminal found causes fallback to Normal)
+	model.inputMode = ModeTerminal
+
+	// Custom prefix (Ctrl+]) should activate prefix
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: ']', Mod: tea.ModCtrl}))
+	model = updated.(Model)
+	if !model.prefixPending {
+		t.Error("Ctrl+] should activate prefix when configured as prefix key")
+	}
+}
+
+func TestBuildActionMap(t *testing.T) {
+	kb := config.DefaultKeyBindings()
+	am := BuildActionMap(kb)
+
+	// Check configurable keys
+	if am["q"] != "quit" {
+		t.Errorf("expected q→quit, got %q", am["q"])
+	}
+	if am["n"] != "new_terminal" {
+		t.Errorf("expected n→new_terminal, got %q", am["n"])
+	}
+	if am["h"] != "snap_left" {
+		t.Errorf("expected h→snap_left, got %q", am["h"])
+	}
+
+	// Check hardcoded alternates
+	if am["ctrl+q"] != "quit" {
+		t.Errorf("expected ctrl+q→quit, got %q", am["ctrl+q"])
+	}
+	if am["left"] != "snap_left" {
+		t.Errorf("expected left→snap_left, got %q", am["left"])
+	}
+	if am["enter"] != "enter_terminal" {
+		t.Errorf("expected enter→enter_terminal, got %q", am["enter"])
 	}
 }

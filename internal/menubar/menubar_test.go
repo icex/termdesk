@@ -68,10 +68,16 @@ func TestMoveHover(t *testing.T) {
 		t.Errorf("hover = %d, want 1", mb.HoverIndex)
 	}
 
-	// Move down → should skip separator (2) and go to 3 (Quit)
+	// Move down → should skip separator (2) and go to 3 (Detach)
 	mb.MoveHover(1)
 	if mb.HoverIndex != 3 {
 		t.Errorf("hover = %d, want 3 (skip separator)", mb.HoverIndex)
+	}
+
+	// Move down → go to 4 (Quit)
+	mb.MoveHover(1)
+	if mb.HoverIndex != 4 {
+		t.Errorf("hover = %d, want 4 (Quit)", mb.HoverIndex)
 	}
 
 	// Move down → wrap to 0
@@ -80,10 +86,16 @@ func TestMoveHover(t *testing.T) {
 		t.Errorf("hover = %d, want 0 (wrap)", mb.HoverIndex)
 	}
 
-	// Move up from 0 → wrap to last selectable (3)
+	// Move up from 0 → wrap to last selectable (4)
+	mb.MoveHover(-1)
+	if mb.HoverIndex != 4 {
+		t.Errorf("hover = %d, want 4 (wrap up)", mb.HoverIndex)
+	}
+
+	// Move up from 4 → go to 3 (Detach)
 	mb.MoveHover(-1)
 	if mb.HoverIndex != 3 {
-		t.Errorf("hover = %d, want 3 (wrap up)", mb.HoverIndex)
+		t.Errorf("hover = %d, want 3 (Detach)", mb.HoverIndex)
 	}
 
 	// Move up from 3 → skip separator (2) and go to 1

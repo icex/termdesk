@@ -46,6 +46,7 @@ func New(width int) *MenuBar {
 				{Label: "New Terminal", Shortcut: "n", Action: "new_terminal"},
 				{Label: "Minimize", Shortcut: "m", Action: "minimize"},
 				{Label: "─", Disabled: true},
+				{Label: "Detach", Shortcut: "F12", Action: "detach"},
 				{Label: "Quit", Shortcut: "Ctrl+Q", Action: "quit"},
 			}},
 			{Label: "Apps", Items: []MenuItem{

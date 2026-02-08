@@ -52,6 +52,9 @@ type Model struct {
 	memUsedGB    float64
 	animations   []Animation     // active animations
 	modal        *ModalOverlay   // help, about, or other modal
+	keybindings  config.KeyBindings
+	actionMap    map[string]string // key string → action name (reverse lookup)
+	prefixPending bool            // true when prefix key pressed, waiting for action
 }
 
 // ConfirmDialog represents a confirmation dialog overlay.
@@ -121,6 +124,53 @@ type SystemStatsMsg struct {
 	BatPresent  bool
 }
 
+// BuildActionMap creates a reverse lookup from KeyBindings (key → action).
+// Includes configurable primary keys and hardcoded alternate keys.
+func BuildActionMap(kb config.KeyBindings) map[string]string {
+	am := map[string]string{}
+
+	// Primary bindings from config
+	am[kb.Quit] = "quit"
+	am[kb.NewTerminal] = "new_terminal"
+	am[kb.CloseWindow] = "close_window"
+	am[kb.EnterTerminal] = "enter_terminal"
+	am[kb.Minimize] = "minimize"
+	am[kb.Rename] = "rename"
+	am[kb.DockFocus] = "dock_focus"
+	am[kb.Launcher] = "launcher"
+	am[kb.SnapLeft] = "snap_left"
+	am[kb.SnapRight] = "snap_right"
+	am[kb.Maximize] = "maximize"
+	am[kb.Restore] = "restore"
+	am[kb.TileAll] = "tile_all"
+	am[kb.Expose] = "expose"
+	am[kb.NextWindow] = "next_window"
+	am[kb.PrevWindow] = "prev_window"
+	am[kb.Help] = "help"
+	am[kb.ToggleExpose] = "toggle_expose"
+	am[kb.MenuBar] = "menu_bar"
+	am[kb.MenuFile] = "menu_file"
+	am[kb.MenuApps] = "menu_apps"
+	am[kb.MenuView] = "menu_view"
+
+	// Hardcoded alternates (always work alongside configurable keys)
+	am["ctrl+q"] = "quit"
+	am["ctrl+c"] = "quit"
+	am["ctrl+n"] = "new_terminal"
+	am["ctrl+w"] = "close_window"
+	am["enter"] = "enter_terminal"
+	am["ctrl+space"] = "launcher"
+	am["ctrl+/"] = "launcher"
+	am["left"] = "snap_left"
+	am["right"] = "snap_right"
+	am["up"] = "maximize"
+	am["down"] = "restore"
+	am["ctrl+]"] = "next_window"
+	am["ctrl+["] = "prev_window"
+
+	return am
+}
+
 // New creates a new root Model.
 func New() Model {
 	userCfg := config.LoadUserConfig()
@@ -132,14 +182,17 @@ func New() Model {
 	}
 	d := dock.New(80)
 	d.IconsOnly = userCfg.IconsOnly
+	am := BuildActionMap(userCfg.Keys)
 	return Model{
-		wm:        window.NewManager(80, 24),
-		theme:     theme,
-		terminals: make(map[string]*terminal.Terminal),
-		menuBar:   mb,
-		dock:      d,
-		launcher:  launcher.New(),
-		progRef:   &programRef{},
+		wm:          window.NewManager(80, 24),
+		theme:       theme,
+		terminals:   make(map[string]*terminal.Terminal),
+		menuBar:     mb,
+		dock:        d,
+		launcher:    launcher.New(),
+		progRef:     &programRef{},
+		keybindings: userCfg.Keys,
+		actionMap:   am,
 	}
 }
 
@@ -368,28 +421,37 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleMenuKey(key)
 	}
 
-	// ── Layer 2: Global hotkeys (work in any mode) ──
+	// ── Layer 2: Prefix pending state (any mode) ──
 
-	switch key {
-	case "ctrl+q":
-		m.confirmClose = &ConfirmDialog{Title: "Quit termdesk?", IsQuit: true}
-		return m, nil
-	case "f1":
-		m.modal = m.helpOverlay()
-		return m, nil
-	case "f10":
-		m.menuBar.OpenMenu(0)
-		return m, nil
-	case "f9":
-		if m.exposeMode {
-			m.exitExpose()
-		} else {
-			m.enterExpose()
-		}
-		return m, tickAnimation()
+	if m.prefixPending {
+		m.prefixPending = false
+		return m.handlePrefixAction(msg, key)
 	}
 
-	// ── Layer 3: Mode-specific dispatch ──
+	// ── Layer 3: Global hotkeys — only in non-Terminal modes ──
+
+	if m.inputMode != ModeTerminal {
+		switch key {
+		case "ctrl+q":
+			m.confirmClose = &ConfirmDialog{Title: "Quit termdesk?", IsQuit: true}
+			return m, nil
+		case "f1":
+			m.modal = m.helpOverlay()
+			return m, nil
+		case "f10":
+			m.menuBar.OpenMenu(0)
+			return m, nil
+		case "f9":
+			if m.exposeMode {
+				m.exitExpose()
+			} else {
+				m.enterExpose()
+			}
+			return m, tickAnimation()
+		}
+	}
+
+	// ── Layer 4: Mode-specific dispatch ──
 
 	switch m.inputMode {
 	case ModeTerminal:
@@ -402,11 +464,16 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleTerminalModeKey handles keys when in Terminal mode.
-// All keys are forwarded to the focused terminal except mode-switch keys.
+// Only the prefix key and F2 are intercepted; everything else goes to the terminal.
 func (m Model) handleTerminalModeKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
-	// Mode switch: Esc, Ctrl+Esc, or F2 → Normal mode
-	switch key {
-	case "esc", "escape", "ctrl+escape", "f2":
+	// Prefix key → enter prefix pending state
+	if key == m.keybindings.Prefix {
+		m.prefixPending = true
+		return m, nil
+	}
+
+	// F2 is a hardcoded escape hatch (always exits Terminal mode)
+	if key == "f2" {
 		m.inputMode = ModeNormal
 		return m, nil
 	}
@@ -420,22 +487,97 @@ func (m Model) handleTerminalModeKey(msg tea.KeyPressMsg, key string) (tea.Model
 		}
 	}
 
-	// No terminal focused — fall through to Normal mode behavior
+	// No terminal focused — switch to Normal mode (key is NOT reprocessed)
 	m.inputMode = ModeNormal
-	return m.handleNormalModeKey(msg, key)
+	return m, nil
 }
 
-// handleNormalModeKey handles keys when in Normal (window management) mode.
-// Single-letter keys do WM operations without needing Ctrl.
-func (m Model) handleNormalModeKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
-	// ── Dock navigation sub-mode ──
-	if m.dockFocused {
-		return m.handleDockNav(key)
+// handlePrefixAction dispatches an action after the prefix key was pressed.
+func (m Model) handlePrefixAction(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
+	// Double-prefix: send prefix key to terminal (like tmux Ctrl+b Ctrl+b)
+	if key == m.keybindings.Prefix {
+		if fw := m.wm.FocusedWindow(); fw != nil {
+			if term, ok := m.terminals[fw.ID]; ok {
+				k := tea.Key(msg)
+				term.SendKey(k.Code, k.Mod, k.Text)
+			}
+		}
+		return m, nil
 	}
 
-	switch key {
-	// Enter Terminal mode
-	case "i", "enter":
+	// Esc after prefix → exit terminal mode
+	if key == "esc" || key == "escape" {
+		m.inputMode = ModeNormal
+		return m, nil
+	}
+
+	// Look up action
+	action := m.actionMap[key]
+
+	// Handle 1-9 for window-by-index
+	if action == "" && len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
+		idx := int(key[0]-'0') - 1
+		windows := m.wm.Windows()
+		if idx < len(windows) {
+			m.wm.FocusWindow(windows[idx].ID)
+		}
+		return m, nil
+	}
+
+	// Unrecognized key — forward to terminal (prefix consumed, matches tmux behavior)
+	if action == "" {
+		if fw := m.wm.FocusedWindow(); fw != nil {
+			if term, ok := m.terminals[fw.ID]; ok {
+				k := tea.Key(msg)
+				term.SendKey(k.Code, k.Mod, k.Text)
+			}
+		}
+		return m, nil
+	}
+
+	// Execute the action
+	return m.executeAction(action, msg, key)
+}
+
+// Actions that keep the user in Terminal mode after prefix.
+var terminalStayActions = map[string]bool{
+	"snap_left": true, "snap_right": true,
+	"maximize": true, "restore": true,
+	"tile_all": true, "new_terminal": true,
+	"next_window": true, "prev_window": true,
+}
+
+// executeAction runs a named WM action. Called from both Normal mode (direct)
+// and Terminal mode (via prefix). When invoked via prefix, non-geometry actions
+// switch to Normal mode so overlays/dialogs work.
+func (m Model) executeAction(action string, msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
+	wasTerminal := m.inputMode == ModeTerminal
+
+	switch action {
+	case "quit":
+		m.confirmClose = &ConfirmDialog{Title: "Quit termdesk?", IsQuit: true}
+		if wasTerminal {
+			m.inputMode = ModeNormal
+		}
+		return m, nil
+
+	case "new_terminal":
+		cmd := m.openTerminalWindow()
+		return m, cmd
+
+	case "close_window":
+		if fw := m.wm.FocusedWindow(); fw != nil {
+			m.confirmClose = &ConfirmDialog{
+				WindowID: fw.ID,
+				Title:    fmt.Sprintf("Close \"%s\"?", fw.Title),
+			}
+		}
+		if wasTerminal {
+			m.inputMode = ModeNormal
+		}
+		return m, nil
+
+	case "enter_terminal":
 		if fw := m.wm.FocusedWindow(); fw != nil {
 			if _, ok := m.terminals[fw.ID]; ok {
 				m.inputMode = ModeTerminal
@@ -444,45 +586,16 @@ func (m Model) handleNormalModeKey(msg tea.KeyPressMsg, key string) (tea.Model, 
 		}
 		return m, nil
 
-	// Window cycling
-	case "tab", "ctrl+]":
-		m.wm.CycleForward()
-		return m, nil
-	case "shift+tab", "ctrl+[":
-		m.wm.CycleBackward()
-		return m, nil
-
-	// Focus dock
-	case "d":
-		m.dockFocused = true
-		if m.dock.HoverIndex < 0 {
-			m.dock.SetHover(0)
-		}
-		return m, nil
-
-	// Quit
-	case "q", "ctrl+c":
-		m.confirmClose = &ConfirmDialog{Title: "Quit termdesk?", IsQuit: true}
-		return m, nil
-
-	// New terminal
-	case "n", "ctrl+n":
-		m.inputMode = ModeNormal
-		cmd := m.openTerminalWindow()
-		return m, cmd
-
-	// Close window
-	case "w", "ctrl+w":
+	case "minimize":
 		if fw := m.wm.FocusedWindow(); fw != nil {
-			m.confirmClose = &ConfirmDialog{
-				WindowID: fw.ID,
-				Title:    fmt.Sprintf("Close \"%s\"?", fw.Title),
-			}
+			m.minimizeWindow(fw)
 		}
-		return m, nil
+		if wasTerminal {
+			m.inputMode = ModeNormal
+		}
+		return m, tickAnimation()
 
-	// Rename window
-	case "r":
+	case "rename":
 		if fw := m.wm.FocusedWindow(); fw != nil {
 			text := []rune(fw.Title)
 			m.renameDialog = &RenameDialog{
@@ -491,22 +604,29 @@ func (m Model) handleNormalModeKey(msg tea.KeyPressMsg, key string) (tea.Model, 
 				Cursor:   len(text),
 			}
 		}
-		return m, nil
-
-	// Minimize
-	case "m":
-		if fw := m.wm.FocusedWindow(); fw != nil {
-			m.minimizeWindow(fw)
+		if wasTerminal {
+			m.inputMode = ModeNormal
 		}
-		return m, tickAnimation()
-
-	// Launcher
-	case "space", "ctrl+space", "ctrl+/":
-		m.launcher.Toggle()
 		return m, nil
 
-	// Snap left/right
-	case "left", "h":
+	case "dock_focus":
+		m.dockFocused = true
+		if m.dock.HoverIndex < 0 {
+			m.dock.SetHover(0)
+		}
+		if wasTerminal {
+			m.inputMode = ModeNormal
+		}
+		return m, nil
+
+	case "launcher":
+		m.launcher.Toggle()
+		if wasTerminal {
+			m.inputMode = ModeNormal
+		}
+		return m, nil
+
+	case "snap_left":
 		if fw := m.wm.FocusedWindow(); fw != nil {
 			from := fw.Rect
 			window.SnapLeft(fw, m.wm.WorkArea())
@@ -514,7 +634,8 @@ func (m Model) handleNormalModeKey(msg tea.KeyPressMsg, key string) (tea.Model, 
 			m.resizeTerminalForWindow(fw)
 		}
 		return m, tickAnimation()
-	case "right", "l":
+
+	case "snap_right":
 		if fw := m.wm.FocusedWindow(); fw != nil {
 			from := fw.Rect
 			window.SnapRight(fw, m.wm.WorkArea())
@@ -523,8 +644,7 @@ func (m Model) handleNormalModeKey(msg tea.KeyPressMsg, key string) (tea.Model, 
 		}
 		return m, tickAnimation()
 
-	// Maximize / restore
-	case "up", "k":
+	case "maximize":
 		if fw := m.wm.FocusedWindow(); fw != nil {
 			from := fw.Rect
 			window.Maximize(fw, m.wm.WorkArea())
@@ -532,7 +652,8 @@ func (m Model) handleNormalModeKey(msg tea.KeyPressMsg, key string) (tea.Model, 
 			m.resizeTerminalForWindow(fw)
 		}
 		return m, tickAnimation()
-	case "down", "j":
+
+	case "restore":
 		if fw := m.wm.FocusedWindow(); fw != nil {
 			from := fw.Rect
 			window.Restore(fw)
@@ -541,41 +662,109 @@ func (m Model) handleNormalModeKey(msg tea.KeyPressMsg, key string) (tea.Model, 
 		}
 		return m, tickAnimation()
 
-	// Tile all
-	case "t":
+	case "tile_all":
 		m.animateTileAll()
 		return m, tickAnimation()
 
-	// Exposé
-	case "x":
+	case "expose":
 		m.enterExpose()
+		if wasTerminal {
+			m.inputMode = ModeNormal
+		}
 		return m, tickAnimation()
 
+	case "next_window":
+		m.wm.CycleForward()
+		return m, nil
+
+	case "prev_window":
+		m.wm.CycleBackward()
+		return m, nil
+
+	case "help":
+		m.modal = m.helpOverlay()
+		if wasTerminal {
+			m.inputMode = ModeNormal
+		}
+		return m, nil
+
+	case "toggle_expose":
+		if m.exposeMode {
+			m.exitExpose()
+		} else {
+			m.enterExpose()
+		}
+		if wasTerminal {
+			m.inputMode = ModeNormal
+		}
+		return m, tickAnimation()
+
+	case "menu_bar":
+		m.menuBar.OpenMenu(0)
+		if wasTerminal {
+			m.inputMode = ModeNormal
+		}
+		return m, nil
+
+	case "menu_file":
+		m.menuBar.OpenMenu(0)
+		if wasTerminal {
+			m.inputMode = ModeNormal
+		}
+		return m, nil
+
+	case "menu_apps":
+		m.menuBar.OpenMenu(1)
+		if wasTerminal {
+			m.inputMode = ModeNormal
+		}
+		return m, nil
+
+	case "menu_view":
+		m.menuBar.OpenMenu(2)
+		if wasTerminal {
+			m.inputMode = ModeNormal
+		}
+		return m, nil
+	}
+
+	return m, nil
+}
+
+// handleNormalModeKey handles keys when in Normal (window management) mode.
+func (m Model) handleNormalModeKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
+	// ── Dock navigation sub-mode ──
+	if m.dockFocused {
+		return m.handleDockNav(key)
+	}
+
+	// Prefix key works in Normal mode too — activates PREFIX badge
+	if key == m.keybindings.Prefix {
+		m.prefixPending = true
+		return m, nil
+	}
+
+	// Esc in normal mode — exit dock focus or no-op
+	if key == "esc" || key == "escape" {
+		m.dockFocused = false
+		m.dock.SetHover(-1)
+		return m, nil
+	}
+
 	// Focus window by number (1-9)
-	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+	if len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
 		idx := int(key[0]-'0') - 1
 		windows := m.wm.Windows()
 		if idx < len(windows) {
 			m.wm.FocusWindow(windows[idx].ID)
 		}
 		return m, nil
+	}
 
-	// Menu shortcuts
-	case "f":
-		m.menuBar.OpenMenu(0) // File
-		return m, nil
-	case "a":
-		m.menuBar.OpenMenu(1) // Apps
-		return m, nil
-	case "v":
-		m.menuBar.OpenMenu(2) // View
-		return m, nil
-
-	// Esc in normal mode — exit dock focus or no-op
-	case "esc", "escape":
-		m.dockFocused = false
-		m.dock.SetHover(-1)
-		return m, nil
+	// Look up action in keymap
+	action := m.actionMap[key]
+	if action != "" {
+		return m.executeAction(action, msg, key)
 	}
 
 	return m, nil
@@ -787,6 +976,19 @@ func (m Model) executeMenuAction(action string) (tea.Model, tea.Cmd) {
 	case "launch_calc":
 		cmd := m.openTerminalWindowWith("python3", nil)
 		return m, cmd
+	case "detach":
+		// Write a message hinting the user to use the detach key combo.
+		// The actual detach is handled client-side (Ctrl+\ then d).
+		m.modal = &ModalOverlay{
+			Title: "Detach",
+			Lines: []string{
+				"Press F12 to detach.",
+				"Session will keep running in the background.",
+				"",
+				"Re-attach with: termdesk",
+			},
+		}
+		return m, nil
 	case "theme_retro", "theme_modern", "theme_tokyonight", "theme_catppuccin":
 		name := action[6:] // strip "theme_" prefix
 		m.theme = config.GetTheme(name)
@@ -1670,40 +1872,54 @@ func (m Model) handleMenuBarRightClick(zoneType string) (tea.Model, tea.Cmd) {
 
 // helpOverlay returns a modal with keybinding help.
 func (m *Model) helpOverlay() *ModalOverlay {
+	kb := m.keybindings
+	pfx := strings.ToUpper(kb.Prefix)
 	return &ModalOverlay{
 		Title: "Keybindings",
 		Lines: []string{
-			"Global (any mode):",
-			"  F1            This Help",
-			"  F9            Toggle Expose\u0301",
-			"  F10           Menu Bar",
-			"",
 			"NORMAL mode (window management):",
-			"  q             Quit",
-			"  i / Enter     \u2192 Terminal mode",
-			"  n / Ctrl+N    New Terminal",
-			"  w / Ctrl+W    Close Window",
-			"  m             Minimize to Dock",
-			"  r             Rename Window",
-			"  d             Navigate Dock",
-			"  Space/Ctrl+Sp Launcher",
-			"  Tab           Next Window",
-			"  h / l         Snap Left/Right",
-			"  j / k         Restore / Maximize",
-			"  t             Tile All",
-			"  x             Exposé",
-			"  f / a / v     File / Apps / View menu",
+			fmt.Sprintf("  %-14s Quit", kb.Quit),
+			fmt.Sprintf("  %-14s \u2192 Terminal mode", kb.EnterTerminal+" / Enter"),
+			fmt.Sprintf("  %-14s New Terminal", kb.NewTerminal+" / Ctrl+N"),
+			fmt.Sprintf("  %-14s Close Window", kb.CloseWindow+" / Ctrl+W"),
+			fmt.Sprintf("  %-14s Minimize to Dock", kb.Minimize),
+			fmt.Sprintf("  %-14s Rename Window", kb.Rename),
+			fmt.Sprintf("  %-14s Navigate Dock", kb.DockFocus),
+			fmt.Sprintf("  %-14s Launcher", kb.Launcher+"/Ctrl+Sp"),
+			fmt.Sprintf("  %-14s Next Window", kb.NextWindow),
+			fmt.Sprintf("  %-14s Snap Left/Right", kb.SnapLeft+" / "+kb.SnapRight),
+			fmt.Sprintf("  %-14s Restore / Maximize", kb.Restore+" / "+kb.Maximize),
+			fmt.Sprintf("  %-14s Tile All", kb.TileAll),
+			fmt.Sprintf("  %-14s Expos\u00e9", kb.Expose),
+			fmt.Sprintf("  %-14s File / Apps / View", kb.MenuFile+" / "+kb.MenuApps+" / "+kb.MenuView),
 			"  1-9           Focus Window #N",
 			"",
-			"NORMAL + Dock (d):",
+			"TERMINAL mode (prefix system):",
+			fmt.Sprintf("  %-14s PREFIX key", pfx),
+			"  F2            Exit to Normal (hardcoded)",
+			"",
+			fmt.Sprintf("PREFIX (%s) + action:", pfx),
+			fmt.Sprintf("  + Esc         \u2192 Normal mode"),
+			fmt.Sprintf("  + %-11s Quit", kb.Quit),
+			fmt.Sprintf("  + %-11s New Terminal", kb.NewTerminal),
+			fmt.Sprintf("  + %-11s Close Window", kb.CloseWindow),
+			fmt.Sprintf("  + %-11s Snap Left/Right", kb.SnapLeft+"/"+kb.SnapRight),
+			fmt.Sprintf("  + %-11s Max / Restore", kb.Maximize+"/"+kb.Restore),
+			fmt.Sprintf("  + %-11s Tile All", kb.TileAll),
+			fmt.Sprintf("  + %-11s Expos\u00e9", kb.Expose),
+			fmt.Sprintf("  + %-11s Help", kb.Help),
+			fmt.Sprintf("  + %-11s Menu Bar", kb.MenuBar),
+			fmt.Sprintf("  + %-11s %s to terminal", pfx, pfx),
+			"",
+			"DOCK (d):",
 			"  \u2190/\u2192 h/l       Navigate items",
 			"  Enter         Activate / Restore",
 			"  Esc           Exit dock",
 			"",
-			"TERMINAL mode (keys \u2192 terminal):",
-			"  Esc           \u2192 Normal mode",
+			"SESSION:",
+			"  F12           Detach (session persists)",
 			"",
-			"Expose\u0301:",
+			"Expos\u00e9:",
 			"  Tab / Arrows  Navigate",
 			"  Enter         Select window",
 			"  Esc           Cancel",
@@ -1904,7 +2120,7 @@ func (m Model) View() tea.View {
 	// Check for expose enter/exit animations
 	if m.hasExposeAnimations() {
 		buf := RenderExposeTransition(m.wm, m.theme, m.animations)
-		RenderMenuBar(buf, m.menuBar, m.theme, m.inputMode)
+		RenderMenuBar(buf, m.menuBar, m.theme, m.inputMode, m.prefixPending)
 		RenderDock(buf, m.dock, m.theme, nil)
 		v.SetContent(BufferToString(buf))
 		return v
@@ -1912,7 +2128,7 @@ func (m Model) View() tea.View {
 
 	if m.exposeMode {
 		buf := RenderExpose(m.wm, m.theme)
-		RenderMenuBar(buf, m.menuBar, m.theme, m.inputMode)
+		RenderMenuBar(buf, m.menuBar, m.theme, m.inputMode, m.prefixPending)
 		RenderDock(buf, m.dock, m.theme, nil)
 		v.SetContent(BufferToString(buf))
 		return v
@@ -1929,7 +2145,7 @@ func (m Model) View() tea.View {
 		}
 	}
 	buf := RenderFrame(m.wm, m.theme, m.terminals, animRects)
-	RenderMenuBar(buf, m.menuBar, m.theme, m.inputMode)
+	RenderMenuBar(buf, m.menuBar, m.theme, m.inputMode, m.prefixPending)
 	RenderDock(buf, m.dock, m.theme, m.animations)
 	if m.launcher.Visible {
 		RenderLauncher(buf, m.launcher, m.theme)

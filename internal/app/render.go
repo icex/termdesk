@@ -242,6 +242,19 @@ func RenderWindow(buf *Buffer, w *window.Window, theme config.Theme, term *termi
 		// Default FG: light gray text for cells with no explicit foreground
 		defaultFg := hexToColor("#C0C0C0")
 		renderTerminalContent(buf, contentRect, term, defaultFg, hexToColor(cbg))
+
+		// Show cursor for focused terminal windows — invert fg/bg at cursor position
+		if w.Focused {
+			cx, cy := term.CursorPosition()
+			sx := contentRect.X + cx
+			sy := contentRect.Y + cy
+			if sx >= contentRect.X && sx < contentRect.Right() &&
+				sy >= contentRect.Y && sy < contentRect.Bottom() &&
+				sx >= 0 && sx < buf.Width && sy >= 0 && sy < buf.Height {
+				cell := &buf.Cells[sy][sx]
+				cell.Fg, cell.Bg = cell.Bg, cell.Fg
+			}
+		}
 	}
 
 	// Desaturate unfocused windows — go monochrome + dim slightly
@@ -384,7 +397,7 @@ func RenderFrame(wm *window.Manager, theme config.Theme, terminals map[string]*t
 }
 
 // RenderMenuBar draws the menu bar at the top of the buffer.
-func RenderMenuBar(buf *Buffer, mb *menubar.MenuBar, theme config.Theme, mode InputMode) {
+func RenderMenuBar(buf *Buffer, mb *menubar.MenuBar, theme config.Theme, mode InputMode, prefixPending bool) {
 	if mb == nil || buf.Height < 1 {
 		return
 	}
@@ -403,20 +416,27 @@ func RenderMenuBar(buf *Buffer, mb *menubar.MenuBar, theme config.Theme, mode In
 	}
 
 	// Compute mode badge (placed at far right, fixed width)
-	modeLabel := modeBadge(mode)
-	modeLabelLen := runewidth.StringWidth(modeLabel)
+	var modeLabel string
 	var modeFg, modeBg string
-	switch mode {
-	case ModeTerminal:
+	if prefixPending {
+		modeLabel = " \uf11c PREFIX   "
 		modeFg = "#1E1E2E"
-		modeBg = "#98C379" // green
-	case ModeCopy:
-		modeFg = "#1E1E2E"
-		modeBg = "#61AFEF" // blue
-	default: // ModeNormal
-		modeFg = "#1E1E2E"
-		modeBg = "#E5C07B" // yellow
+		modeBg = "#E06C75" // red — signals "waiting for action"
+	} else {
+		modeLabel = modeBadge(mode)
+		switch mode {
+		case ModeTerminal:
+			modeFg = "#1E1E2E"
+			modeBg = "#98C379" // green
+		case ModeCopy:
+			modeFg = "#1E1E2E"
+			modeBg = "#61AFEF" // blue
+		default: // ModeNormal
+			modeFg = "#1E1E2E"
+			modeBg = "#E5C07B" // yellow
+		}
 	}
+	modeLabelLen := runewidth.StringWidth(modeLabel)
 
 	// Render bar text with reduced width (leave room for mode badge)
 	effectiveWidth := buf.Width - modeLabelLen

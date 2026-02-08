@@ -224,6 +224,12 @@ func (t *Terminal) SendMouseWheel(button uv.MouseButton, col, row int) {
 	}))
 }
 
+// CursorPosition returns the cursor's X, Y position in the terminal grid.
+func (t *Terminal) CursorPosition() (int, int) {
+	pos := t.emu.CursorPosition()
+	return pos.X, pos.Y
+}
+
 // Render returns the terminal screen as an ANSI-encoded string.
 func (t *Terminal) Render() string {
 	return t.emu.Render()

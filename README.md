@@ -4,6 +4,7 @@ A retro terminal desktop environment inspired by Windows 1.0, DESQview, and Mac 
 
 ## Features
 
+- **Session attach/detach** — tmux-like persistent sessions (detach with `F12`, reattach with `termdesk`)
 - **Overlapping windows** with drag, resize, maximize, snap (left/right), tile, and minimize
 - **PTY terminal windows** running real shells and TUI apps (nvim, htop, mc, etc.)
 - **VT100/ANSI terminal emulation** via charmbracelet/x/vt with full keyboard and mouse forwarding
@@ -13,7 +14,8 @@ A retro terminal desktop environment inspired by Windows 1.0, DESQview, and Mac 
 - **4 themes**: Retro (Win 1.0 blue), Modern (OneDark), Tokyo Night, Catppuccin Mocha — switchable via View menu
 - **Expose mode** for window overview with animated cycling (focused window centered, thumbnails in strip)
 - **Window animations** for open, close, maximize, restore, snap, tile, minimize, and expose transitions
-- **Input modes**: Normal (WM keys), Terminal (passthrough to shell), Copy (vim-style scrollback)
+- **Input modes**: Normal (WM keys), Terminal (prefix-gated, like tmux), Copy (vim-style scrollback)
+- **Configurable keybindings** via TOML config with tmux-style prefix key (`Ctrl+G`)
 - **Confirm dialogs** with clickable styled buttons (green Yes / red No)
 - **Bell/notification highlighting** on unfocused terminal windows
 - **Help overlay** (F1) and About dialog
@@ -102,6 +104,20 @@ termdesk            # if installed via install.sh
 make run            # build and run from source
 ```
 
+## Sessions (tmux-like)
+
+Termdesk runs as a persistent background server. Close your terminal and reattach later — all windows and shells survive.
+
+```bash
+termdesk              # Start or attach to default session
+termdesk new work     # Create a named session
+termdesk ls           # List active sessions
+termdesk attach work  # Reattach to a named session
+termdesk kill work    # Kill a session
+```
+
+**Detach**: Press `F12` to detach (or use File > Detach menu). The session keeps running in the background.
+
 ## Configuration
 
 Settings are saved to `~/.config/termdesk/config.toml`:
@@ -109,9 +125,23 @@ Settings are saved to `~/.config/termdesk/config.toml`:
 ```toml
 theme = "modern"       # retro, modern, tokyonight, catppuccin
 icons_only = false     # dock shows icons only (no labels)
+
+[keybindings]
+prefix = "ctrl+g"      # prefix key for Terminal mode (like tmux)
+# quit = "q"
+# new_terminal = "n"
+# close_window = "w"
+# snap_left = "h"
+# snap_right = "l"
+# maximize = "k"
+# restore = "j"
+# tile_all = "t"
+# expose = "x"
+# help = "f1"
+# menu_bar = "f10"
 ```
 
-Theme and dock mode changes are persisted automatically via the View menu.
+Theme and dock mode changes are persisted automatically via the View menu. Keybindings are fully customizable — uncomment and change any binding above.
 
 ## Development
 
@@ -124,32 +154,44 @@ make run            # Build and run
 
 ## Keybindings
 
-### Window Management (Normal Mode)
+### Normal Mode (Window Management)
 
 | Key | Action |
 |-----|--------|
-| `Ctrl+N` | New terminal window |
-| `Ctrl+W` | Close focused window (with confirmation) |
-| `Ctrl+Space` | Open command palette |
-| `Alt+Tab` | Cycle windows forward |
-| `Alt+Shift+Tab` | Cycle windows backward |
-| `Ctrl+Left` | Snap window left |
-| `Ctrl+Right` | Snap window right |
-| `Ctrl+Up` | Maximize window |
-| `Ctrl+Down` | Restore window |
-| `Ctrl+T` | Tile all windows |
-| `R` | Rename focused window |
-| `Q` | Quit (in Normal mode, no window focused) |
+| `q` | Quit |
+| `i` / `Enter` | Enter Terminal mode |
+| `n` / `Ctrl+N` | New terminal window |
+| `w` / `Ctrl+W` | Close focused window |
+| `m` | Minimize to dock |
+| `r` | Rename window |
+| `d` | Navigate dock |
+| `Space` / `Ctrl+Space` | Open launcher |
+| `Tab` | Next window |
+| `h` / `l` | Snap left / right |
+| `k` / `j` | Maximize / restore |
+| `t` | Tile all windows |
+| `x` | Expose mode |
+| `f` / `a` / `v` | File / Apps / View menu |
+| `1`-`9` | Focus window by number |
 | `F1` | Help overlay |
-| `F10` | Toggle menu bar |
-| `Escape` | Exit current mode / dismiss overlay |
 
-### Input Modes
+### Terminal Mode (Prefix System)
+
+In Terminal mode, all keys go to the terminal app. Use the **prefix key** (`Ctrl+G` by default) to access WM commands — just like tmux.
 
 | Key | Action |
 |-----|--------|
-| `Enter` (on focused window) | Switch to Terminal mode |
-| `Escape` (in Terminal mode) | Return to Normal mode |
+| `Ctrl+G` | Activate prefix (badge shows PREFIX) |
+| `Ctrl+G` then action | Execute WM action (same keys as Normal mode) |
+| `Ctrl+G` then `Esc` | Exit to Normal mode |
+| `Ctrl+G` then `Ctrl+G` | Send `Ctrl+G` to terminal |
+| `F2` | Exit to Normal mode (hardcoded fallback) |
+
+### Session
+
+| Key | Action |
+|-----|--------|
+| `F12` | Detach from session (keeps running) |
 
 ### Expose Mode
 
@@ -167,7 +209,7 @@ make run            # Build and run
 - **Drag** borders/corners to resize
 - **Click** close [X], maximize [box], minimize [_] buttons
 - **Click** dock items to launch apps or restore minimized windows
-- **Click** menu bar items, CPU/MEM/battery (opens btop), clock (shows date)
+- **Click** menu bar items, CPU/MEM/battery (opens htop), clock (shows date)
 - **Click** expose thumbnails to select
 - **Scroll wheel** in terminal windows
 - **Mouse forwarding** to TUI apps (vim, htop, mc)

@@ -2,20 +2,17 @@ package session
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/charmbracelet/x/term"
 )
-
-// detachSeq is the F12 escape sequence (xterm: \x1b[24~).
-var detachSeq = []byte("\x1b[24~")
 
 // Attach connects to the named session and proxies I/O until detach or disconnect.
 func Attach(name string) error {
@@ -25,15 +22,14 @@ func Attach(name string) error {
 	if err != nil {
 		return fmt.Errorf("cannot connect to session %q: %w", name, err)
 	}
-	defer conn.Close()
 
 	// Put terminal in raw mode
 	fd := os.Stdin.Fd()
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
+		conn.Close()
 		return fmt.Errorf("raw mode: %w", err)
 	}
-	defer term.Restore(fd, oldState)
 
 	// Send initial terminal size
 	sendCurrentSize(conn)
@@ -41,7 +37,6 @@ func Attach(name string) error {
 	// Handle SIGWINCH for resize forwarding
 	sigWinch := make(chan os.Signal, 1)
 	signal.Notify(sigWinch, syscall.SIGWINCH)
-	defer signal.Stop(sigWinch)
 
 	done := make(chan error, 2)
 
@@ -57,7 +52,19 @@ func Attach(name string) error {
 
 	err = <-done
 
-	// Restore terminal before printing any message
+	// Close connection first to stop both goroutines — prevents the read
+	// goroutine from writing more ANSI data to stdout after our reset.
+	signal.Stop(sigWinch)
+	conn.Close()
+
+	// Give the read goroutine a moment to drain and exit
+	time.Sleep(20 * time.Millisecond)
+
+	// Reset terminal state: the BT app enables alt screen, mouse mode,
+	// bracketed paste, and custom colors — we must undo all of that.
+	resetTerminal(os.Stdout)
+
+	// Restore terminal (raw → cooked mode)
 	term.Restore(fd, oldState)
 
 	if err == errDetached {
@@ -72,25 +79,50 @@ func Attach(name string) error {
 	return nil
 }
 
+// resetTerminal writes ANSI escape sequences to undo the modes enabled by
+// the Bubble Tea app: alt screen, mouse tracking, bracketed paste, custom
+// colors, and cursor visibility.
+func resetTerminal(f *os.File) {
+	var seq []byte
+	seq = append(seq, "\x1b[?1049l"...)  // exit alt screen
+	seq = append(seq, "\x1b[?1002l"...)  // disable mouse cell motion
+	seq = append(seq, "\x1b[?1003l"...)  // disable mouse all motion
+	seq = append(seq, "\x1b[?1006l"...)  // disable SGR mouse encoding
+	seq = append(seq, "\x1b[?2004l"...)  // disable bracketed paste
+	seq = append(seq, "\x1b[?25h"...)    // show cursor
+	seq = append(seq, "\x1b[0m"...)      // reset all SGR attributes
+	seq = append(seq, "\x1b]110\x07"...) // reset default foreground (OSC 110)
+	seq = append(seq, "\x1b]111\x07"...) // reset default background (OSC 111)
+	f.Write(seq)
+}
+
 var errDetached = fmt.Errorf("detached")
 
 // clientReadLoop reads TLV messages from the server and writes output to the terminal.
-// Uses buffered output with periodic flushing to minimize syscalls over SSH.
+// Uses buffered output with periodic flushing to minimize syscalls.
+// A mutex protects the bufio.Writer since Flush runs from a timer goroutine.
 func clientReadLoop(conn net.Conn, out *os.File) error {
 	bw := bufio.NewWriterSize(out, 32768)
+	var mu sync.Mutex
+
 	// Flush periodically — coalesces many small writes into fewer large ones.
-	ticker := time.NewTicker(8 * time.Millisecond)
+	// Uses a mutex because bufio.Writer is not thread-safe.
+	ticker := time.NewTicker(16 * time.Millisecond)
 	defer ticker.Stop()
 	go func() {
 		for range ticker.C {
+			mu.Lock()
 			bw.Flush()
+			mu.Unlock()
 		}
 	}()
 
 	for {
 		typ, payload, err := ReadMsg(conn)
 		if err != nil {
+			mu.Lock()
 			bw.Flush()
+			mu.Unlock()
 			if err == io.EOF {
 				return nil
 			}
@@ -98,13 +130,14 @@ func clientReadLoop(conn net.Conn, out *os.File) error {
 		}
 		switch typ {
 		case MsgOutput, MsgRedraw:
+			mu.Lock()
 			bw.Write(payload)
+			mu.Unlock()
 		}
 	}
 }
 
-// clientWriteLoop reads from stdin and sends to the server.
-// Intercepts F12 (\x1b[24~) as the detach key. Handles SIGWINCH.
+// clientWriteLoop reads from stdin and sends to the server. Handles SIGWINCH.
 func clientWriteLoop(in *os.File, conn net.Conn, sigWinch <-chan os.Signal) error {
 	buf := make([]byte, 4096)
 
@@ -118,15 +151,7 @@ func clientWriteLoop(in *os.File, conn net.Conn, sigWinch <-chan os.Signal) erro
 
 		n, err := in.Read(buf)
 		if n > 0 {
-			data := buf[:n]
-
-			// Check for F12 escape sequence
-			if bytes.Contains(data, detachSeq) {
-				WriteMsg(conn, MsgDetach, nil)
-				return errDetached
-			}
-
-			WriteMsg(conn, MsgInput, data)
+			WriteMsg(conn, MsgInput, buf[:n])
 		}
 		if err != nil {
 			return err

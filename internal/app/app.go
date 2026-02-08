@@ -76,11 +76,19 @@ type RenameDialog struct {
 	Cursor   int
 }
 
+// HelpTab represents a single tab in a tabbed help overlay.
+type HelpTab struct {
+	Title string
+	Lines []string
+}
+
 // ModalOverlay represents a modal text overlay (help, about, etc.)
 type ModalOverlay struct {
-	Title    string
-	Lines    []string
-	ScrollY  int
+	Title     string
+	Lines     []string  // simple modals (about, etc.)
+	Tabs      []HelpTab // tabbed help (nil for simple modals)
+	ActiveTab int
+	ScrollY   int
 }
 
 // InputMode represents the current interaction mode.
@@ -177,6 +185,8 @@ func BuildActionMap(kb config.KeyBindings) map[string]string {
 
 // New creates a new root Model.
 func New() Model {
+	initDebug()
+	dbg("New() called")
 	userCfg := config.LoadUserConfig()
 	theme := config.GetTheme(userCfg.Theme)
 	mb := menubar.New(80)
@@ -233,8 +243,14 @@ func (m Model) tickSystemStats() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Update dock running indicators in Update(), not View().
+	// Calling this in View() mutated shared state (dock is a pointer) on every
+	// render frame, causing dock slice corruption during rapid animations.
+	m.updateDockRunning()
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		dbg("WindowSizeMsg: %dx%d", msg.Width, msg.Height)
 		m.width = msg.Width
 		m.height = msg.Height
 		m.wm.SetBounds(msg.Width, msg.Height)
@@ -245,6 +261,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resizeAllTerminals()
 
 	case tea.KeyPressMsg:
+		dbg("key: %s mode=%s prefix=%v", msg.String(), m.inputMode, m.prefixPending)
 		return m.handleKeyPress(msg)
 
 	case tea.MouseClickMsg:
@@ -327,7 +344,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	if m.modal != nil {
 		switch key {
-		case "esc", "escape", "enter", "q":
+		case "esc", "escape", "q":
 			m.modal = nil
 		case "up", "k":
 			if m.modal.ScrollY > 0 {
@@ -335,6 +352,24 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		case "down", "j":
 			m.modal.ScrollY++
+		case "tab", "right", "l":
+			if m.modal.Tabs != nil {
+				m.modal.ActiveTab = (m.modal.ActiveTab + 1) % len(m.modal.Tabs)
+				m.modal.ScrollY = 0
+			}
+		case "shift+tab", "left", "h":
+			if m.modal.Tabs != nil {
+				m.modal.ActiveTab = (m.modal.ActiveTab - 1 + len(m.modal.Tabs)) % len(m.modal.Tabs)
+				m.modal.ScrollY = 0
+			}
+		case "1", "2", "3", "4":
+			if m.modal.Tabs != nil {
+				idx := int(key[0]-'0') - 1
+				if idx < len(m.modal.Tabs) {
+					m.modal.ActiveTab = idx
+					m.modal.ScrollY = 0
+				}
+			}
 		}
 		return m, nil
 	}
@@ -527,6 +562,19 @@ func (m Model) handlePrefixAction(msg tea.KeyPressMsg, key string) (tea.Model, t
 	// Esc after prefix → exit terminal mode
 	if key == "esc" || key == "escape" {
 		m.inputMode = ModeNormal
+		return m, nil
+	}
+
+	// prefix+c → enter copy mode (scrollback navigation)
+	if key == "c" {
+		m.scrollOffset = 0
+		m.inputMode = ModeCopy
+		return m, nil
+	}
+
+	// prefix+d → detach session (like tmux prefix+d)
+	if key == "d" {
+		os.Stdout.Write([]byte("\x1b]666;detach\x07"))
 		return m, nil
 	}
 
@@ -767,6 +815,13 @@ func (m Model) handleNormalModeKey(msg tea.KeyPressMsg, key string) (tea.Model, 
 	if key == "esc" || key == "escape" {
 		m.dockFocused = false
 		m.dock.SetHover(-1)
+		return m, nil
+	}
+
+	// c → enter copy mode (scrollback navigation)
+	if key == "c" {
+		m.scrollOffset = 0
+		m.inputMode = ModeCopy
 		return m, nil
 	}
 
@@ -1033,25 +1088,13 @@ func (m Model) executeMenuAction(action string) (tea.Model, tea.Cmd) {
 		cmd := m.openTerminalWindowWith("python3", nil)
 		return m, cmd
 	case "detach":
-		// Write a message hinting the user to use the detach key combo.
-		// The actual detach is handled client-side (Ctrl+\ then d).
-		m.modal = &ModalOverlay{
-			Title: "Detach",
-			Lines: []string{
-				"Press F12 to detach.",
-				"Session will keep running in the background.",
-				"",
-				"Re-attach with: termdesk",
-			},
-		}
+		// Send OSC detach sequence — server detects this and disconnects client
+		os.Stdout.Write([]byte("\x1b]666;detach\x07"))
 		return m, nil
 	case "theme_retro", "theme_modern", "theme_tokyonight", "theme_catppuccin":
 		name := action[6:] // strip "theme_" prefix
+		dbg("theme change: %s", name)
 		m.theme = config.GetTheme(name)
-		// Update terminal default background for new theme (Termux fix)
-		if bg := m.theme.DesktopBg; len(bg) == 7 && bg[0] == '#' {
-			fmt.Fprintf(os.Stdout, "\x1b]11;rgb:%s/%s/%s\x07", bg[1:3], bg[3:5], bg[5:7])
-		}
 		// Persist theme choice
 		cfg := config.LoadUserConfig()
 		cfg.Theme = name
@@ -1281,17 +1324,23 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		return m, tickAnimation()
 
 	case window.HitContent:
-		// Clicking on terminal content enters Terminal mode
-		if _, ok := m.terminals[w.ID]; ok {
-			m.inputMode = ModeTerminal
-		}
-		// Forward mouse click to terminal via emulator (respects mouse mode)
-		if term, ok := m.terminals[w.ID]; ok {
-			cr := w.ContentRect()
-			localX := mouse.X - cr.X // 0-indexed
-			localY := mouse.Y - cr.Y
-			btn := teaToUvButton(mouse.Button)
-			term.SendMouse(btn, localX, localY, false)
+		// In Copy mode, clicks should NOT enter terminal mode.
+		// (Future: click will start text selection.)
+		if m.inputMode == ModeCopy {
+			// Stay in copy mode — click handled as selection start (TODO)
+		} else {
+			// Clicking on terminal content enters Terminal mode
+			if _, ok := m.terminals[w.ID]; ok {
+				m.inputMode = ModeTerminal
+			}
+			// Forward mouse click to terminal via emulator (respects mouse mode)
+			if term, ok := m.terminals[w.ID]; ok {
+				cr := w.ContentRect()
+				localX := mouse.X - cr.X // 0-indexed
+				localY := mouse.Y - cr.Y
+				btn := teaToUvButton(mouse.Button)
+				term.SendMouse(btn, localX, localY, false)
+			}
 		}
 
 	case window.HitTitleBar, window.HitBorderN, window.HitBorderS, window.HitBorderE,
@@ -1385,6 +1434,32 @@ func (m Model) handleMouseRelease(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleMouseWheel(mouse tea.Mouse) (tea.Model, tea.Cmd) {
+	// Copy mode: mouse wheel scrolls the scrollback buffer
+	if m.inputMode == ModeCopy {
+		fw := m.wm.FocusedWindow()
+		if fw == nil {
+			return m, nil
+		}
+		term := m.terminals[fw.ID]
+		if term == nil {
+			return m, nil
+		}
+		maxScroll := term.ScrollbackLen()
+		switch mouse.Button {
+		case tea.MouseWheelUp:
+			m.scrollOffset += 3
+			if m.scrollOffset > maxScroll {
+				m.scrollOffset = maxScroll
+			}
+		case tea.MouseWheelDown:
+			m.scrollOffset -= 3
+			if m.scrollOffset < 0 {
+				m.scrollOffset = 0
+			}
+		}
+		return m, nil
+	}
+
 	p := geometry.Point{X: mouse.X, Y: mouse.Y}
 	w := m.wm.WindowAt(p)
 	if w == nil {
@@ -1967,10 +2042,12 @@ func (m Model) handleMenuBarRightClick(zoneType string) (tea.Model, tea.Cmd) {
 func (m *Model) helpOverlay() *ModalOverlay {
 	kb := m.keybindings
 	pfx := strings.ToUpper(kb.Prefix)
-	return &ModalOverlay{
-		Title: "Keybindings",
+
+	general := HelpTab{
+		Title: "General",
 		Lines: []string{
 			"NORMAL mode (window management):",
+			"",
 			fmt.Sprintf("  %-14s Quit", kb.Quit),
 			fmt.Sprintf("  %-14s \u2192 Terminal mode", kb.EnterTerminal+" / Enter"),
 			fmt.Sprintf("  %-14s New Terminal", kb.NewTerminal+" / Ctrl+N"),
@@ -1987,12 +2064,32 @@ func (m *Model) helpOverlay() *ModalOverlay {
 			fmt.Sprintf("  %-14s File / Apps / View", kb.MenuFile+" / "+kb.MenuApps+" / "+kb.MenuView),
 			"  1-9           Focus Window #N",
 			"",
-			"TERMINAL mode (prefix system):",
+			"DOCK:",
+			"  \u2190/\u2192 h/l       Navigate items",
+			"  Enter         Activate / Restore",
+			"  Esc           Exit dock",
+			"",
+			"EXPOSE:",
+			"  Tab / Arrows  Navigate",
+			"  Enter         Select window",
+			"  Esc           Cancel",
+		},
+	}
+
+	terminal := HelpTab{
+		Title: "Terminal",
+		Lines: []string{
+			"TERMINAL mode:",
+			"",
+			"  All keys are forwarded to the terminal",
+			"  except the prefix key.",
+			"",
 			fmt.Sprintf("  %-14s PREFIX key", pfx),
-			"  F2            Exit to Normal (hardcoded)",
 			"",
 			fmt.Sprintf("PREFIX (%s) + action:", pfx),
+			"",
 			fmt.Sprintf("  + Esc         \u2192 Normal mode"),
+			fmt.Sprintf("  + d           Detach session"),
 			fmt.Sprintf("  + %-11s Quit", kb.Quit),
 			fmt.Sprintf("  + %-11s New Terminal", kb.NewTerminal),
 			fmt.Sprintf("  + %-11s Close Window", kb.CloseWindow),
@@ -2003,20 +2100,56 @@ func (m *Model) helpOverlay() *ModalOverlay {
 			fmt.Sprintf("  + %-11s Help", kb.Help),
 			fmt.Sprintf("  + %-11s Menu Bar", kb.MenuBar),
 			fmt.Sprintf("  + %-11s %s to terminal", pfx, pfx),
-			"",
-			"DOCK (d):",
-			"  \u2190/\u2192 h/l       Navigate items",
-			"  Enter         Activate / Restore",
-			"  Esc           Exit dock",
-			"",
-			"SESSION:",
-			"  F12           Detach (session persists)",
-			"",
-			"Expos\u00e9:",
-			"  Tab / Arrows  Navigate",
-			"  Enter         Select window",
-			"  Esc           Cancel",
+			"  + 1-9         Focus Window #N",
 		},
+	}
+
+	copyMode := HelpTab{
+		Title: "Copy",
+		Lines: []string{
+			"COPY mode (scrollback navigation):",
+			"",
+			"  Enter Copy mode from Normal: c",
+			"  Enter Copy mode from Terminal: Pfx+c",
+			"",
+			"  Up / k        Scroll up one line",
+			"  Down / j       Scroll down one line",
+			"  PgUp          Scroll up one page",
+			"  PgDown         Scroll down one page",
+			"  Home / g       Scroll to oldest line",
+			"  End / G        Scroll to newest (live)",
+			"",
+			"  Esc / q        Exit to Normal mode",
+			"  i              Exit to Terminal mode",
+			"",
+			"  A scroll indicator [↑ N/M] appears in",
+			"  the window bottom border when scrolled.",
+		},
+	}
+
+	session := HelpTab{
+		Title: "Session",
+		Lines: []string{
+			"SESSION (detach / re-attach):",
+			"",
+			"  Prefix + d    Detach from session",
+			"                Session keeps running",
+			"",
+			"  Re-attach:    termdesk",
+			"                (auto-reconnects to",
+			"                existing session)",
+			"",
+			"  Start new:    termdesk --new",
+			"                (starts fresh session)",
+			"",
+			"  Quit:         Ctrl+Q (from Normal mode)",
+			"                or Prefix + Ctrl+Q",
+		},
+	}
+
+	return &ModalOverlay{
+		Title: "Help",
+		Tabs:  []HelpTab{general, terminal, copyMode, session},
 	}
 }
 
@@ -2201,24 +2334,20 @@ func (m Model) View() tea.View {
 	var v tea.View
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion // CellMotion (1002) is more compatible with Termux than AllMotion (1003)
-	c := m.theme.C()
-	v.BackgroundColor = c.DesktopBg
-	v.ForegroundColor = c.DefaultFg
+	v.BackgroundColor = hexToColor(m.theme.DesktopBg)
+	v.ForegroundColor = hexToColor("#C0C0C0")
 
 	if !m.ready {
 		v.SetContent("Starting termdesk...")
 		return v
 	}
 
-	// Update dock running indicators from window manager state
-	m.updateDockRunning()
-
 	// Check for expose enter/exit animations
 	if m.hasExposeAnimations() {
 		buf := RenderExposeTransition(m.wm, m.theme, m.animations)
 		RenderMenuBar(buf, m.menuBar, m.theme, m.inputMode, m.prefixPending)
 		RenderDock(buf, m.dock, m.theme, nil)
-		v.SetContent(buf) // Direct cell transfer — no ANSI round-trip
+		v.SetContent(BufferToString(buf))
 		return v
 	}
 
@@ -2226,7 +2355,7 @@ func (m Model) View() tea.View {
 		buf := RenderExpose(m.wm, m.theme)
 		RenderMenuBar(buf, m.menuBar, m.theme, m.inputMode, m.prefixPending)
 		RenderDock(buf, m.dock, m.theme, nil)
-		v.SetContent(buf)
+		v.SetContent(BufferToString(buf))
 		return v
 	}
 
@@ -2262,6 +2391,9 @@ func (m Model) View() tea.View {
 	if m.renameDialog != nil {
 		RenderRenameDialog(buf, m.renameDialog, m.theme)
 	}
-	v.SetContent(buf) // Direct cell transfer — no ANSI round-trip
+	s := BufferToString(buf)
+	dbg("View: buf=%dx%d ansi=%d wins=%d anims=%d dock=%d",
+		buf.Width, buf.Height, len(s), len(m.wm.Windows()), len(m.animations), len(m.dock.Items))
+	v.SetContent(s)
 	return v
 }

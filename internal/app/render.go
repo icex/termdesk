@@ -20,6 +20,7 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
+
 // runeLen returns the number of runes (display columns) in a string.
 func runeLen(s string) int {
 	return utf8.RuneCountInString(s)
@@ -31,6 +32,7 @@ type Cell struct {
 	Fg    color.Color // nil = default
 	Bg    color.Color // nil = default
 	Attrs uint8       // text attributes (bold, italic, etc.)
+	Width int8        // display width: 1 = normal, 2 = wide, 0 = continuation
 }
 
 // Text attribute constants matching ultraviolet.
@@ -93,7 +95,7 @@ func NewBuffer(width, height int, bgColor string) *Buffer {
 	for y := range cells {
 		cells[y] = make([]Cell, width)
 		for x := range cells[y] {
-			cells[y][x] = Cell{Char: ' ', Fg: fg, Bg: bg}
+			cells[y][x] = Cell{Char: ' ', Fg: fg, Bg: bg, Width: 1}
 		}
 	}
 	return &Buffer{Width: width, Height: height, Cells: cells}
@@ -103,14 +105,14 @@ func NewBuffer(width, height int, bgColor string) *Buffer {
 // fg and bg are hex color strings like "#RRGGBB", or "" for default.
 func (b *Buffer) Set(x, y int, char rune, fg, bg string) {
 	if x >= 0 && x < b.Width && y >= 0 && y < b.Height {
-		b.Cells[y][x] = Cell{Char: char, Fg: hexToColor(fg), Bg: hexToColor(bg)}
+		b.Cells[y][x] = Cell{Char: char, Fg: hexToColor(fg), Bg: hexToColor(bg), Width: 1}
 	}
 }
 
 // SetCell sets a cell at the given position with color.Color values directly.
 func (b *Buffer) SetCell(x, y int, char rune, fg, bg color.Color, attrs uint8) {
 	if x >= 0 && x < b.Width && y >= 0 && y < b.Height {
-		b.Cells[y][x] = Cell{Char: char, Fg: fg, Bg: bg, Attrs: attrs}
+		b.Cells[y][x] = Cell{Char: char, Fg: fg, Bg: bg, Attrs: attrs, Width: 1}
 	}
 }
 
@@ -136,7 +138,7 @@ func (b *Buffer) FillRect(r geometry.Rect, char rune, fg, bg string) {
 func (b *Buffer) SetStringC(x, y int, s string, fg, bg color.Color) {
 	col := 0
 	for _, ch := range s {
-		b.SetCell(x+col, y, ch, fg, bg, 0)
+		b.SetCell(x+col, y, ch, fg, bg, 0) // SetCell sets Width=1
 		col++
 	}
 }
@@ -145,7 +147,7 @@ func (b *Buffer) SetStringC(x, y int, s string, fg, bg color.Color) {
 func (b *Buffer) FillRectC(r geometry.Rect, char rune, fg, bg color.Color) {
 	for y := r.Y; y < r.Bottom(); y++ {
 		for x := r.X; x < r.Right(); x++ {
-			b.SetCell(x, y, char, fg, bg, 0)
+			b.SetCell(x, y, char, fg, bg, 0) // SetCell sets Width=1
 		}
 	}
 }
@@ -158,9 +160,14 @@ func (b *Buffer) Draw(s tea.Screen, r tea.Rectangle) {
 		for x := r.Min.X; x < r.Max.X && x-r.Min.X < b.Width; x++ {
 			col := x - r.Min.X
 			cell := b.Cells[row][col]
+			w := int(cell.Width)
+			if w < 0 {
+				w = 1
+			}
+			// Width=0 is valid (continuation cell from wide chars); pass through
 			s.SetCell(x, y, &uv.Cell{
 				Content: string(cell.Char),
-				Width:   1,
+				Width:   w,
 				Style:   uv.Style{Fg: cell.Fg, Bg: cell.Bg, Attrs: cell.Attrs},
 			})
 		}
@@ -199,7 +206,7 @@ func NewThemedBuffer(width, height int, theme config.Theme) *Buffer {
 					cellFg = patFg
 				}
 			}
-			cells[y][x] = Cell{Char: ch, Fg: cellFg, Bg: bg}
+			cells[y][x] = Cell{Char: ch, Fg: cellFg, Bg: bg, Width: 1}
 		}
 	}
 	return &Buffer{Width: width, Height: height, Cells: cells}
@@ -405,7 +412,14 @@ func renderTerminalContent(buf *Buffer, area geometry.Rect, term *terminal.Termi
 				if fg == nil {
 					fg = defaultFg
 				}
-				buf.SetCell(area.X+dx, area.Y+dy, ch, fg, bg, cell.Style.Attrs)
+				bx, by := area.X+dx, area.Y+dy
+				if bx >= 0 && bx < buf.Width && by >= 0 && by < buf.Height {
+					w := int8(cell.Width)
+					if w < 0 {
+						w = 1
+					}
+					buf.Cells[by][bx] = Cell{Char: ch, Fg: fg, Bg: bg, Attrs: cell.Style.Attrs, Width: w}
+				}
 			}
 		}
 		return
@@ -468,7 +482,14 @@ func renderTerminalContent(buf *Buffer, area geometry.Rect, term *terminal.Termi
 			if fg == nil {
 				fg = defaultFg
 			}
-			buf.SetCell(area.X+dx, area.Y+scrollLines+dy, ch, fg, bg, cell.Style.Attrs)
+			bx, by := area.X+dx, area.Y+scrollLines+dy
+			if bx >= 0 && bx < buf.Width && by >= 0 && by < buf.Height {
+				w := int8(cell.Width)
+				if w < 0 {
+					w = 1
+				}
+				buf.Cells[by][bx] = Cell{Char: ch, Fg: fg, Bg: bg, Attrs: cell.Style.Attrs, Width: w}
+			}
 		}
 	}
 }
@@ -554,8 +575,15 @@ func RenderFrame(wm *window.Manager, theme config.Theme, terminals map[string]*t
 		// Use animated rect if available
 		if animRect, ok := animRects[w.ID]; ok {
 			origRect := w.Rect
+			// Clamp animated rect to valid range (easeOutBack can overshoot)
+			if animRect.Width < 1 {
+				animRect.Width = 1
+			}
+			if animRect.Height < 1 {
+				animRect.Height = 1
+			}
 			w.Rect = animRect
-			// Skip terminal content during close animation (window is shrinking)
+			// Skip terminal content during close/minimize animation (window is shrinking)
 			if animRect.Width <= 3 || animRect.Height <= 3 {
 				RenderWindow(buf, w, theme, nil, showCursor, 0)
 			} else {
@@ -1031,16 +1059,36 @@ func RenderRenameDialog(buf *Buffer, dialog *RenameDialog, theme config.Theme) {
 }
 
 // RenderModal draws a scrollable modal overlay centered on the buffer.
+// Supports tabbed modals (when modal.Tabs is non-nil).
 func RenderModal(buf *Buffer, modal *ModalOverlay, theme config.Theme) {
 	if modal == nil {
 		return
 	}
 
-	// Calculate box dimensions
+	// Resolve which lines to display (tabs or plain)
+	lines := modal.Lines
+	if modal.Tabs != nil && len(modal.Tabs) > 0 {
+		if modal.ActiveTab >= len(modal.Tabs) {
+			modal.ActiveTab = 0
+		}
+		lines = modal.Tabs[modal.ActiveTab].Lines
+	}
+
+	// Calculate box dimensions across all tabs (so size doesn't jump)
 	maxLineW := runeLen(modal.Title)
-	for _, line := range modal.Lines {
-		if w := runeLen(line); w > maxLineW {
-			maxLineW = w
+	if modal.Tabs != nil {
+		for _, tab := range modal.Tabs {
+			for _, line := range tab.Lines {
+				if w := runeLen(line); w > maxLineW {
+					maxLineW = w
+				}
+			}
+		}
+	} else {
+		for _, line := range lines {
+			if w := runeLen(line); w > maxLineW {
+				maxLineW = w
+			}
 		}
 	}
 	boxW := maxLineW + 4 // 2 border + 2 padding
@@ -1048,15 +1096,30 @@ func RenderModal(buf *Buffer, modal *ModalOverlay, theme config.Theme) {
 		boxW = buf.Width - 4
 	}
 
-	visibleLines := buf.Height - 8
+	// Calculate max lines across all tabs (stable box height)
+	maxTabLines := len(lines)
+	if modal.Tabs != nil {
+		for _, tab := range modal.Tabs {
+			if len(tab.Lines) > maxTabLines {
+				maxTabLines = len(tab.Lines)
+			}
+		}
+	}
+
+	visibleLines := buf.Height - 10
 	if visibleLines < 3 {
 		visibleLines = 3
 	}
-	if visibleLines > len(modal.Lines) {
-		visibleLines = len(modal.Lines)
+	if visibleLines > maxTabLines {
+		visibleLines = maxTabLines
 	}
 
-	boxH := visibleLines + 4 // top border + title + empty + lines + bottom border
+	hasTabBar := modal.Tabs != nil && len(modal.Tabs) > 0
+	extraRows := 0
+	if hasTabBar {
+		extraRows = 1 // tab bar row
+	}
+	boxH := visibleLines + 4 + extraRows // border + title + sep + [tabs] + lines + border
 	startX := (buf.Width - boxW) / 2
 	startY := (buf.Height - boxH) / 2
 	if startX < 0 {
@@ -1071,7 +1134,7 @@ func RenderModal(buf *Buffer, modal *ModalOverlay, theme config.Theme) {
 	innerW := boxW - 2
 
 	// Clamp scroll
-	maxScroll := len(modal.Lines) - visibleLines
+	maxScroll := len(lines) - visibleLines
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
@@ -1095,24 +1158,51 @@ func RenderModal(buf *Buffer, modal *ModalOverlay, theme config.Theme) {
 	buf.SetString(titleX, startY+1, modal.Title, fg, bg)
 	buf.Set(startX+boxW-1, startY+1, theme.BorderVertical, fg, bg)
 
-	// Separator
+	// Separator after title
 	buf.Set(startX, startY+2, theme.BorderVertical, fg, bg)
 	for x := 1; x < boxW-1; x++ {
 		buf.Set(startX+x, startY+2, theme.BorderHorizontal, fg, bg)
 	}
 	buf.Set(startX+boxW-1, startY+2, theme.BorderVertical, fg, bg)
 
+	contentStartY := startY + 3
+
+	// Tab bar (if tabbed)
+	if hasTabBar {
+		tabY := contentStartY
+		buf.Set(startX, tabY, theme.BorderVertical, fg, bg)
+		for x := 1; x < boxW-1; x++ {
+			buf.Set(startX+x, tabY, ' ', fg, bg)
+		}
+		buf.Set(startX+boxW-1, tabY, theme.BorderVertical, fg, bg)
+
+		// Render tab labels
+		tabActiveFg := "#1E1E2E"
+		tabActiveBg := "#61AFEF"
+		tx := startX + 2
+		for i, tab := range modal.Tabs {
+			label := " " + tab.Title + " "
+			if i == modal.ActiveTab {
+				buf.SetString(tx, tabY, label, tabActiveFg, tabActiveBg)
+			} else {
+				buf.SetString(tx, tabY, label, fg, bg)
+			}
+			tx += runeLen(label) + 1
+		}
+		contentStartY++
+	}
+
 	// Content lines
 	for i := 0; i < visibleLines; i++ {
 		lineIdx := modal.ScrollY + i
-		y := startY + 3 + i
+		y := contentStartY + i
 		buf.Set(startX, y, theme.BorderVertical, fg, bg)
 		for x := 1; x < boxW-1; x++ {
 			buf.Set(startX+x, y, ' ', fg, bg)
 		}
 		buf.Set(startX+boxW-1, y, theme.BorderVertical, fg, bg)
-		if lineIdx < len(modal.Lines) {
-			line := modal.Lines[lineIdx]
+		if lineIdx < len(lines) {
+			line := lines[lineIdx]
 			lineRunes := []rune(line)
 			if len(lineRunes) > innerW {
 				line = string(lineRunes[:innerW])
@@ -1122,7 +1212,7 @@ func RenderModal(buf *Buffer, modal *ModalOverlay, theme config.Theme) {
 	}
 
 	// Bottom border
-	botY := startY + 3 + visibleLines
+	botY := contentStartY + visibleLines
 	buf.Set(startX, botY, theme.BorderBottomLeft, fg, bg)
 	for x := 1; x < boxW-1; x++ {
 		buf.Set(startX+x, botY, theme.BorderHorizontal, fg, bg)
@@ -1201,7 +1291,7 @@ func renderExposeMiniWindow(buf *Buffer, theme config.Theme, w *window.Window, x
 			for _, ch := range title {
 				bx := titleX + col
 				if bx >= 0 && bx < buf.Width && titleY >= 0 && titleY < buf.Height {
-					buf.Cells[titleY][bx] = Cell{Char: ch, Fg: fgColor, Bg: bgColor, Attrs: AttrBold}
+					buf.Cells[titleY][bx] = Cell{Char: ch, Fg: fgColor, Bg: bgColor, Attrs: AttrBold, Width: 1}
 				}
 				col++
 			}
@@ -1226,7 +1316,7 @@ func renderExposeMiniWindow(buf *Buffer, theme config.Theme, w *window.Window, x
 			for _, ch := range label {
 				bx := lx + col
 				if bx >= 0 && bx < buf.Width && ly >= 0 && ly < buf.Height {
-					buf.Cells[ly][bx] = Cell{Char: ch, Fg: fgColor, Bg: bgColor}
+					buf.Cells[ly][bx] = Cell{Char: ch, Fg: fgColor, Bg: bgColor, Width: 1}
 				}
 				col++
 			}
@@ -1544,7 +1634,7 @@ func colorsEqual(a, b color.Color) bool {
 // default colors from bleeding through (fixes Termux blue background issue).
 func BufferToString(buf *Buffer) string {
 	var sb strings.Builder
-	sb.Grow(buf.Width * buf.Height * 10) // generous for ANSI sequences
+	sb.Grow(buf.Width * buf.Height * 50) // ~180KB for 120x30: each cell needs ~45 bytes for full ANSI color
 
 	var prevFg, prevBg color.Color
 	var prevAttrs uint8

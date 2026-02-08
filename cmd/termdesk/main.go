@@ -214,6 +214,6 @@ Usage:
   termdesk help         Show this help
 
 Session control:
-  F12                   Detach from session (session keeps running)
+  Ctrl+G, d             Detach from session (session keeps running)
   Ctrl+Q                Quit termdesk (ends session)`)
 }

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"os"
@@ -14,6 +15,9 @@ import (
 	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
 )
+
+// detachOSC is the OSC sequence the app writes to trigger detach.
+var detachOSC = []byte("\x1b]666;detach\x07")
 
 // Server manages a termdesk session: PTY, child app process, Unix socket, screen tracker.
 type Server struct {
@@ -163,25 +167,38 @@ func (s *Server) readPtyLoop() {
 		if n > 0 {
 			data := buf[:n]
 
+			// Check for OSC detach sequence from the app
+			detach := false
+			if bytes.Contains(data, detachOSC) {
+				detach = true
+				data = bytes.ReplaceAll(data, detachOSC, nil)
+			}
+
 			// Feed copy to emulator goroutine (async, non-blocking best-effort)
-			emuData := make([]byte, n)
-			copy(emuData, data)
-			select {
-			case emuCh <- emuData:
-			default: // drop if emulator falls behind
+			if len(data) > 0 {
+				emuData := make([]byte, len(data))
+				copy(emuData, data)
+				select {
+				case emuCh <- emuData:
+				default:
+				}
 			}
 
 			// Forward to connected client
 			s.clientMu.Lock()
 			c := s.client
 			s.clientMu.Unlock()
-			if c != nil {
+			if c != nil && len(data) > 0 {
 				s.writeMu.Lock()
-				err := WriteMsg(c, MsgOutput, data)
+				writeErr := WriteMsg(c, MsgOutput, data)
 				s.writeMu.Unlock()
-				if err != nil {
+				if writeErr != nil {
 					s.disconnectClient()
 				}
+			}
+
+			if detach {
+				s.disconnectClient()
 			}
 		}
 		if err != nil {

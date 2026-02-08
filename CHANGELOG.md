@@ -5,17 +5,25 @@ All notable changes to this project will be documented in this file.
 ## [0.10.0] - 2026-02-08
 
 ### Added
+- **Battery widget** in menu bar with Nerd Font icons (full/3-4/half/quarter/empty), charging bolt, color levels (green/yellow/red). Auto-detects batteries on Linux and Android/Termux
+- **Colorful dock icons** with per-icon hex colors (cyan launcher, green terminal, blue nvim, yellow files, orange calc, purple expose)
+- **Username display** in menu bar (right side, after clock)
+- **Config persistence**: theme and dock icons-only mode saved to `~/.config/termdesk/config.toml`, restored on launch
 - **Window rename** (`r` key in Normal mode) with text input dialog
-- **Config persistence**: theme saved to `~/.config/termdesk/config.toml`, restored on launch
 - **Install script** (`install.sh`) for Linux and macOS with Go/font checks
 - Expose: number keys 1-9 select windows directly
 - Expose: selected window is maximized on exit
 - Max windows increased to 9
 
+### Fixed
+- **Menu bar color bleeding**: right-side zone calculations used byte count instead of rune count for Nerd Font icons, causing CPU/MEM color to bleed into clock area
+- **Battery detection on Android/Termux**: dynamically discovers batteries via `/sys/class/power_supply/` type file instead of hardcoded BAT0-2 names
+
 ### Changed
 - Expose focused window shows title (bold centered) instead of number
 - Expose thumbnails show "N: Title" format for easy identification
 - Terminal default background set via OSC 11 for better Termux compatibility
+- Confirmed working on Termux: mouse events, background colors, and battery all functional
 
 ## [0.9.0] - 2026-02-08
 

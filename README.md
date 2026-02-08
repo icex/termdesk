@@ -7,8 +7,8 @@ A retro terminal desktop environment inspired by Windows 1.0, DESQview, and Mac 
 - **Overlapping windows** with drag, resize, maximize, snap (left/right), tile, and minimize
 - **PTY terminal windows** running real shells and TUI apps (nvim, htop, mc, etc.)
 - **VT100/ANSI terminal emulation** via charmbracelet/x/vt with full keyboard and mouse forwarding
-- **Menu bar** with dropdowns, live CPU/MEM indicators, clock (click for date popup, click CPU/MEM for btop)
-- **Dock** with Nerd Font icons, running indicators, minimized window tabs, launch pulse animation
+- **Menu bar** with dropdowns, live CPU/MEM/battery indicators, clock (click for date popup, click CPU/MEM for btop), logged-in username
+- **Dock** with colorful Nerd Font icons, running indicators, minimized window tabs, launch pulse animation
 - **Command palette** (Ctrl+Space) with fuzzy search across installed apps
 - **4 themes**: Retro (Win 1.0 blue), Modern (OneDark), Tokyo Night, Catppuccin Mocha — switchable via View menu
 - **Expose mode** for window overview with animated cycling (focused window centered, thumbnails in strip)
@@ -19,7 +19,8 @@ A retro terminal desktop environment inspired by Windows 1.0, DESQview, and Mac 
 - **Help overlay** (F1) and About dialog
 - **Unfocused window content fading** for visual depth
 - **Configurable title bar height** via TOML config
-- **TOML configuration** for themes, dock items, and settings
+- **TOML configuration** for themes, dock icons-only mode, and settings
+- **Termux (Android) compatible** — tested with mouse, background colors, and battery widget
 
 ## Requirements
 
@@ -45,10 +46,11 @@ make build
 Settings are saved to `~/.config/termdesk/config.toml`:
 
 ```toml
-theme = "modern"    # retro, modern, tokyonight, catppuccin
+theme = "modern"       # retro, modern, tokyonight, catppuccin
+icons_only = false     # dock shows icons only (no labels)
 ```
 
-Theme changes via the View menu are persisted automatically.
+Theme and dock mode changes are persisted automatically via the View menu.
 
 ## Development
 
@@ -104,7 +106,7 @@ make run            # Build and run
 - **Drag** borders/corners to resize
 - **Click** close [X], maximize [box], minimize [_] buttons
 - **Click** dock items to launch apps or restore minimized windows
-- **Click** menu bar items, CPU/MEM (opens btop), clock (shows date)
+- **Click** menu bar items, CPU/MEM/battery (opens btop), clock (shows date)
 - **Click** expose thumbnails to select
 - **Scroll wheel** in terminal windows
 - **Mouse forwarding** to TUI apps (vim, htop, mc)
@@ -118,10 +120,13 @@ Switch themes via the **View** menu:
 - **Tokyo Night** — Dark purple-blue with soft blue highlights
 - **Catppuccin Mocha** — Warm dark theme with lavender-blue accent
 
-## Known Issues
+## Platform Support
 
-- **Termux (Android)**: Mouse events may not work in plain Termux due to Bubble Tea v2 RC compatibility. Workaround: use tmux inside Termux. Background colors may also appear differently — this is being investigated.
-- **Neovim scrolling**: Line number artifacts during fast scrolling are a neovim display issue, not termdesk.
+| Platform | Status | Notes |
+|----------|--------|-------|
+| Linux | Fully supported | All features including CPU/MEM/battery indicators |
+| macOS | Supported | Install via `install.sh`, battery requires `/sys` or pmset |
+| Android (Termux) | Fully supported | Mouse, background colors, battery widget all working |
 
 ## Architecture
 

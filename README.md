@@ -14,6 +14,12 @@ and a handful of built-in games.
 > and no promise of backward compatibility. Use at your own risk. Bug reports
 > and patches are welcome but may sit for a while.
 
+## Screenshots
+
+![Retro theme — nvim, a shell and yazi with an inline image preview](img/retro.png)
+
+![Catppuccin theme — settings panel, yazi preview, stacked windows](img/cat.png)
+
 ## Quick start
 
 ```bash

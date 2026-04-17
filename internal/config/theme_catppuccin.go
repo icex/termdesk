@@ -1,0 +1,55 @@
+package config
+
+// CatppuccinTheme returns a Catppuccin Mocha inspired theme.
+func CatppuccinTheme() Theme {
+	t := Theme{
+		Name:              "catppuccin",
+		BorderTopLeft:     '╭',
+		BorderTopRight:    '╮',
+		BorderBottomLeft:  '╰',
+		BorderBottomRight: '╯',
+		BorderHorizontal:  '─',
+		BorderVertical:    '│',
+		CloseButton:       " × ",
+		MinButton:         " - ",
+		MaxButton:         " □ ",
+		RestoreButton:     " ◫ ",
+		SnapLeftButton:    " ◧ ",
+		SnapRightButton:   " ◨ ",
+		ActiveBorderFg:    "#89B4FA",
+		ActiveBorderBg:    "#1E1E2E",
+		InactiveBorderFg:  "#585B70",
+		InactiveBorderBg:  "#1E1E2E",
+		ActiveTitleFg:     "#CDD6F4",
+		ActiveTitleBg:     "#1E1E2E",
+		InactiveTitleFg:   "#585B70",
+		InactiveTitleBg:   "#1E1E2E",
+		ContentBg:         "#181825",
+		NotificationFg:    "#F9E2AF",
+		NotificationBg:    "#1E1E2E",
+		MenuBarFg:         "#CDD6F4",
+		MenuBarBg:         "#090912",
+		DockFg:            "#CDD6F4",
+		DockBg:            "#090912",
+		DockAccentBg:      "#313244",
+		DesktopBg:         "#1E1E2E",
+		AccentColor:       "#89B4FA",
+		AccentFg:          "#1E1E2E",
+		SubtleFg:          "#585B70",
+		ButtonYesBg:       "#A6E3A1",
+		ButtonNoBg:        "#F38BA8",
+		ButtonFg:          "#1E1E2E",
+		DesktopPatternChar: '◦',
+		DesktopPatternFg:   "#232336",
+		TitleBarHeight:    1,
+		UnfocusedFade:     0.35,
+		ANSIPalette: [16]string{
+			"#45475A", "#F38BA8", "#A6E3A1", "#F9E2AF",
+			"#89B4FA", "#F5C2E7", "#94E2D5", "#BAC2DE",
+			"#585B70", "#F38BA8", "#A6E3A1", "#F9E2AF",
+			"#89B4FA", "#F5C2E7", "#94E2D5", "#A6ADC8",
+		},
+	}
+	t.ParseColors()
+	return t
+}

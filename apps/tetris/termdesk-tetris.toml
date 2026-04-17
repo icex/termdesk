@@ -1,0 +1,10 @@
+[app]
+name = "Tetris"
+icon = "\uf11b"
+icon_color = "#CBA6F7"
+category = "games"
+
+[window]
+width = 58
+height = 31
+resizable = false

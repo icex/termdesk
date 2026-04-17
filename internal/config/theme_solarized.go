@@ -1,0 +1,55 @@
+package config
+
+// SolarizedTheme returns a Solarized Dark theme.
+func SolarizedTheme() Theme {
+	t := Theme{
+		Name:              "solarized",
+		BorderTopLeft:     '╭',
+		BorderTopRight:    '╮',
+		BorderBottomLeft:  '╰',
+		BorderBottomRight: '╯',
+		BorderHorizontal:  '─',
+		BorderVertical:    '│',
+		CloseButton:       " × ",
+		MinButton:         " - ",
+		MaxButton:         " □ ",
+		RestoreButton:     " ◫ ",
+		SnapLeftButton:    " ◧ ",
+		SnapRightButton:   " ◨ ",
+		ActiveBorderFg:    "#268BD2",
+		ActiveBorderBg:    "#002B36",
+		InactiveBorderFg:  "#586E75",
+		InactiveBorderBg:  "#002B36",
+		ActiveTitleFg:     "#93A1A1",
+		ActiveTitleBg:     "#002B36",
+		InactiveTitleFg:   "#586E75",
+		InactiveTitleBg:   "#002B36",
+		ContentBg:         "#001E27",
+		NotificationFg:    "#B58900",
+		NotificationBg:    "#002B36",
+		MenuBarFg:         "#93A1A1",
+		MenuBarBg:         "#000F14",
+		DockFg:            "#93A1A1",
+		DockBg:            "#000F14",
+		DockAccentBg:      "#073642",
+		DesktopBg:         "#002B36",
+		AccentColor:       "#268BD2",
+		AccentFg:          "#FDF6E3",
+		SubtleFg:          "#586E75",
+		ButtonYesBg:       "#859900",
+		ButtonNoBg:        "#DC322F",
+		ButtonFg:          "#FDF6E3",
+		DesktopPatternChar: '≈',
+		DesktopPatternFg:   "#003340",
+		TitleBarHeight:    1,
+		UnfocusedFade:     0.3,
+		ANSIPalette: [16]string{
+			"#073642", "#DC322F", "#859900", "#B58900",
+			"#268BD2", "#D33682", "#2AA198", "#EEE8D5",
+			"#002B36", "#CB4B16", "#586E75", "#657B83",
+			"#839496", "#6C71C4", "#93A1A1", "#FDF6E3",
+		},
+	}
+	t.ParseColors()
+	return t
+}

@@ -1,0 +1,50 @@
+# Build output
+/bin/
+/dist/
+/termdesk
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+
+# Go
+go.work
+go.work.sum
+*.out
+coverage.html
+coverage.txt
+
+# IDE / editors
+.idea/
+.vscode/
+.claude/
+*.swp
+*.swo
+*.suo
+*.sw?
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project runtime / state
+.termdesk-workspace.toml
+.tmp/
+.taskmaster/
+
+# Logs
+*.log
+
+# Environment
+.env
+
+# Local test / scratch
+*.png
+*.jpg
+*.jpeg
+*.gif
+/cmd/emojidump/
+/cmd/probetest/

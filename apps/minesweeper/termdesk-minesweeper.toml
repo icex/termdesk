@@ -1,0 +1,10 @@
+[app]
+name = "Minesweeper"
+icon = "\uf11b"
+icon_color = "#F38BA8"
+category = "games"
+
+[window]
+width = 46
+height = 36
+resizable = false

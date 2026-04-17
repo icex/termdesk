@@ -1,0 +1,115 @@
+# Termdesk Configuration Example
+# Copy this file to ~/.config/termdesk/config.toml and customize.
+#
+# All settings are optional — defaults are used when omitted.
+
+# ─── Theme ───────────────────────────────────────────────────────────────
+# Available: modern, sleek, retro, tokyonight, catppuccin, redmond, platinum,
+#            ubuntu, aqua, springboard, nord, dracula, solarized, sequoia
+theme = "modern"
+
+# ─── Animations ──────────────────────────────────────────────────────────
+animations = true
+animation_speed = "normal"   # slow, normal, fast
+animation_style = "smooth"   # smooth, snappy, bouncy
+
+# ─── Dock ────────────────────────────────────────────────────────────────
+icons_only = false
+minimize_to_dock = true
+hide_dock_when_maximized = false
+hide_dock_apps = false
+
+# ─── Window Management ──────────────────────────────────────────────────
+tiling_mode = false
+default_terminal_mode = false
+show_desk_clock = false
+show_keys = false
+show_resize_indicator = true
+
+# ─── Workspace ───────────────────────────────────────────────────────────
+workspace_auto_save = true
+workspace_auto_save_min = 1   # auto-save interval in minutes
+
+# ─── Keybindings ─────────────────────────────────────────────────────────
+[keybindings]
+prefix = "ctrl+a"             # prefix key for terminal mode WM actions
+
+# ─── Widget Bar ──────────────────────────────────────────────────────────
+# Controls which widgets appear in the menu bar (right side) and their order.
+# Omit this line to show all built-in widgets in default order.
+#
+# Built-in widgets:
+#   cpu          - CPU usage with sparkline chart
+#   mem          - Memory usage (used/total GB)
+#   battery      - Battery percentage with charge indicator
+#   notification - Unread notification count
+#   workspace    - Current workspace name
+#   clock        - Current time (HH:MM AM/PM)
+#   hostname     - Machine hostname
+#   user         - OS icon + username
+#   disk         - Disk usage percentage (color-coded)
+#   load         - System load average (color-coded vs CPU count)
+#   git          - Current git branch + dirty indicator (click → lazygit)
+#   docker       - Running container count (click → lazydocker)
+#   weather      - Weather from wttr.in (updates every 10 min)
+#   mail         - Unread email count from ~/Maildir/new/
+#
+# Custom widgets (defined below) can also be listed here by name.
+enabled_widgets = "cpu,mem,battery,notification,workspace,clock,hostname,user"
+
+# ─── Custom Widgets ─────────────────────────────────────────────────────
+# Define shell-based widgets that appear in the menu bar.
+# Each widget runs a shell command and displays the output.
+#
+# Fields:
+#   name     (required) - unique identifier, used in enabled_widgets
+#   label    (optional) - human-readable name shown in Settings panel
+#   icon     (optional) - Nerd Font icon prefix (displayed before output)
+#   command  (required) - shell command (executed via "sh -c")
+#   interval (optional) - seconds between refreshes (default: runs every tick)
+#   onClick  (optional) - command to launch when widget is clicked (e.g. "htop")
+#
+# The command output is trimmed to first line, max 20 characters.
+# If the command fails, the previous output is preserved.
+# Commands have a 2-second timeout to prevent hangs.
+#
+# Tips:
+#   - Use short, fast commands (avoid heavy operations)
+#   - Set interval to avoid running expensive commands every second
+#   - Use Nerd Font icons for a polished look (https://www.nerdfonts.com/cheat-sheet)
+#   - Test your command in a terminal first: sh -c "your command"
+
+# Example: Uptime
+# Shows: 󰔟 3d 12h
+# [[custom_widgets]]
+# name = "uptime"
+# label = "Uptime"
+# icon = "󰔟"
+# command = "uptime | sed 's/.*up *//' | sed 's/,.*//' | tr -s ' '"
+# interval = 60
+
+# Example: Network IP address
+# Shows: 󰈀 192.168.1.42
+# [[custom_widgets]]
+# name = "ip"
+# label = "IP Address"
+# icon = "󰈀"
+# command = "ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}'"
+# interval = 30
+
+# Example: Spotify / now playing (macOS)
+# Shows: 🎵 Song Name
+# [[custom_widgets]]
+# name = "music"
+# label = "Now Playing"
+# command = "osascript -e 'tell application \"Spotify\" to name of current track' 2>/dev/null || echo ''"
+# interval = 5
+
+# Example: Tailscale status
+# Shows: 󰖂 connected
+# [[custom_widgets]]
+# name = "tailscale"
+# label = "Tailscale"
+# icon = "󰖂"
+# command = "tailscale status --self 2>/dev/null | awk 'NR==1{print $1}' || echo 'off'"
+# interval = 30

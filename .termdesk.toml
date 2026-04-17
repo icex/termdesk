@@ -1,0 +1,24 @@
+# Termdesk project configuration
+
+# [[autostart]]
+# command = "echo"
+# args = ["Welcome to Termdesk development!"]
+# directory = "."
+# title = "Welcome"
+
+# [[autostart]]
+# command = "ls"
+# args = ["-la"]
+# directory = "."
+# title = "Project Files"
+
+# [[autostart]]
+# command = "sleep"
+# args = ["999"]
+# title = "Frozen Test"
+
+[[dock]]
+name = "Notepad"
+icon = "󱞁"
+icon_color = "#E5C07B"
+command = "nano"

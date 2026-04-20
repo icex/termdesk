@@ -1,0 +1,55 @@
+package config
+
+// DraculaTheme returns a Dracula-inspired purple/dark theme.
+func DraculaTheme() Theme {
+	t := Theme{
+		Name:              "dracula",
+		BorderTopLeft:     '╭',
+		BorderTopRight:    '╮',
+		BorderBottomLeft:  '╰',
+		BorderBottomRight: '╯',
+		BorderHorizontal:  '─',
+		BorderVertical:    '│',
+		CloseButton:       " × ",
+		MinButton:         " - ",
+		MaxButton:         " □ ",
+		RestoreButton:     " ◫ ",
+		SnapLeftButton:    " ◧ ",
+		SnapRightButton:   " ◨ ",
+		ActiveBorderFg:    "#BD93F9",
+		ActiveBorderBg:    "#282A36",
+		InactiveBorderFg:  "#6272A4",
+		InactiveBorderBg:  "#282A36",
+		ActiveTitleFg:     "#F8F8F2",
+		ActiveTitleBg:     "#282A36",
+		InactiveTitleFg:   "#6272A4",
+		InactiveTitleBg:   "#282A36",
+		ContentBg:         "#21222C",
+		NotificationFg:    "#FFB86C",
+		NotificationBg:    "#282A36",
+		MenuBarFg:         "#F8F8F2",
+		MenuBarBg:         "#12131A",
+		DockFg:            "#F8F8F2",
+		DockBg:            "#12131A",
+		DockAccentBg:      "#44475A",
+		DesktopBg:         "#282A36",
+		AccentColor:       "#BD93F9",
+		AccentFg:          "#282A36",
+		SubtleFg:          "#6272A4",
+		ButtonYesBg:       "#50FA7B",
+		ButtonNoBg:        "#FF5555",
+		ButtonFg:          "#282A36",
+		DesktopPatternChar: '◆',
+		DesktopPatternFg:   "#2D2F3D",
+		TitleBarHeight:    1,
+		UnfocusedFade:     0.35,
+		ANSIPalette: [16]string{
+			"#21222C", "#FF5555", "#50FA7B", "#F1FA8C",
+			"#BD93F9", "#FF79C6", "#8BE9FD", "#F8F8F2",
+			"#6272A4", "#FF6E6E", "#69FF94", "#FFFFA5",
+			"#D6ACFF", "#FF92DF", "#A4FFFF", "#FFFFFF",
+		},
+	}
+	t.ParseColors()
+	return t
+}

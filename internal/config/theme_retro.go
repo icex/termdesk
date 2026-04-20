@@ -1,0 +1,50 @@
+package config
+
+// RetroTheme returns a Windows 3.x inspired theme with teal desktop and classic chrome.
+func RetroTheme() Theme {
+	t := Theme{
+		Name:              "retro",
+		BorderTopLeft:     '┌',
+		BorderTopRight:    '┐',
+		BorderBottomLeft:  '└',
+		BorderBottomRight: '┘',
+		BorderHorizontal:  '─',
+		BorderVertical:    '│',
+		CloseButton:       " ▼ ",
+		MinButton:         " ▽ ",
+		MaxButton:         " ▲ ",
+		RestoreButton:     " ⬍ ",
+		SnapLeftButton:    " ◀ ",
+		SnapRightButton:   " ▶ ",
+		ActiveBorderFg:    "#000000",
+		ActiveBorderBg:    "#FFFFFF",
+		InactiveBorderFg:  "#808080",
+		InactiveBorderBg:  "#FFFFFF",
+		ActiveTitleFg:     "#FFFFFF",
+		ActiveTitleBg:     "#000080",
+		InactiveTitleFg:   "#808080",
+		InactiveTitleBg:   "#FFFFFF",
+		ContentBg:         "#FFFFFF",
+		NotificationFg:    "#FF0000",
+		NotificationBg:    "#FFFFFF",
+		MenuBarFg:         "#000000",
+		MenuBarBg:         "#C0C0C0",
+		DockFg:            "#000000",
+		DockBg:            "#C0C0C0",
+		DockAccentBg:      "#000080",
+		DesktopBg:         "#008080",
+		AccentColor:       "#000080",
+		AccentFg:          "#FFFFFF",
+		SubtleFg:          "#555555",
+		ButtonYesBg:       "#C0C0C0",
+		ButtonNoBg:        "#808080",
+		ButtonFg:          "#000000",
+		DefaultFg:         "#000000",
+		DesktopPatternChar: '░',
+		DesktopPatternFg:   "#006868",
+		TitleBarHeight:    1,
+		UnfocusedFade:     0.3,
+	}
+	t.ParseColors()
+	return t
+}

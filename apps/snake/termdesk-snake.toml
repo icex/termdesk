@@ -1,0 +1,10 @@
+[app]
+name = "Snake"
+icon = "\uf11b"
+icon_color = "#A6E3A1"
+category = "games"
+
+[window]
+width = 84
+height = 28
+resizable = false

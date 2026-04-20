@@ -1,0 +1,55 @@
+package config
+
+// TokyoNightTheme returns a Tokyo Night inspired dark theme.
+func TokyoNightTheme() Theme {
+	t := Theme{
+		Name:              "tokyonight",
+		BorderTopLeft:     '╭',
+		BorderTopRight:    '╮',
+		BorderBottomLeft:  '╰',
+		BorderBottomRight: '╯',
+		BorderHorizontal:  '─',
+		BorderVertical:    '│',
+		CloseButton:       " × ",
+		MinButton:         " - ",
+		MaxButton:         " □ ",
+		RestoreButton:     " ◫ ",
+		SnapLeftButton:    " ◧ ",
+		SnapRightButton:   " ◨ ",
+		ActiveBorderFg:    "#7AA2F7",
+		ActiveBorderBg:    "#1A1B26",
+		InactiveBorderFg:  "#565F89",
+		InactiveBorderBg:  "#1A1B26",
+		ActiveTitleFg:     "#C0CAF5",
+		ActiveTitleBg:     "#1A1B26",
+		InactiveTitleFg:   "#565F89",
+		InactiveTitleBg:   "#1A1B26",
+		ContentBg:         "#16161E",
+		NotificationFg:    "#E0AF68",
+		NotificationBg:    "#1A1B26",
+		MenuBarFg:         "#C0CAF5",
+		MenuBarBg:         "#08090F",
+		DockFg:            "#C0CAF5",
+		DockBg:            "#08090F",
+		DockAccentBg:      "#24283B",
+		DesktopBg:         "#1A1B26",
+		AccentColor:       "#7AA2F7",
+		AccentFg:          "#1A1B26",
+		SubtleFg:          "#565F89",
+		ButtonYesBg:       "#9ECE6A",
+		ButtonNoBg:        "#F7768E",
+		ButtonFg:          "#1A1B26",
+		DesktopPatternChar: '✦',
+		DesktopPatternFg:   "#1E1F2B",
+		TitleBarHeight:    1,
+		UnfocusedFade:     0.4,
+		ANSIPalette: [16]string{
+			"#15161E", "#F7768E", "#9ECE6A", "#E0AF68",
+			"#7AA2F7", "#BB9AF7", "#7DCFFF", "#A9B1D6",
+			"#414868", "#F7768E", "#9ECE6A", "#E0AF68",
+			"#7AA2F7", "#BB9AF7", "#7DCFFF", "#C0CAF5",
+		},
+	}
+	t.ParseColors()
+	return t
+}

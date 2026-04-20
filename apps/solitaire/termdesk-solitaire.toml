@@ -1,0 +1,10 @@
+[app]
+name = "Solitaire"
+icon = "\uf0b1"
+icon_color = "#A6E3A1"
+category = "games"
+
+[window]
+width = 70
+height = 45
+resizable = false

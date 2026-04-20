@@ -1,0 +1,9 @@
+[app]
+name = "Calculator"
+icon = "\uf1ec"
+icon_color = "#D19A66"
+
+[window]
+width = 40
+height = 22
+resizable = false

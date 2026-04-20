@@ -1,0 +1,55 @@
+package config
+
+// NordTheme returns a Nord arctic color palette theme.
+func NordTheme() Theme {
+	t := Theme{
+		Name:              "nord",
+		BorderTopLeft:     '╭',
+		BorderTopRight:    '╮',
+		BorderBottomLeft:  '╰',
+		BorderBottomRight: '╯',
+		BorderHorizontal:  '─',
+		BorderVertical:    '│',
+		CloseButton:       " × ",
+		MinButton:         " - ",
+		MaxButton:         " □ ",
+		RestoreButton:     " ◫ ",
+		SnapLeftButton:    " ◧ ",
+		SnapRightButton:   " ◨ ",
+		ActiveBorderFg:    "#88C0D0",
+		ActiveBorderBg:    "#2E3440",
+		InactiveBorderFg:  "#4C566A",
+		InactiveBorderBg:  "#2E3440",
+		ActiveTitleFg:     "#ECEFF4",
+		ActiveTitleBg:     "#2E3440",
+		InactiveTitleFg:   "#4C566A",
+		InactiveTitleBg:   "#2E3440",
+		ContentBg:         "#242933",
+		NotificationFg:    "#EBCB8B",
+		NotificationBg:    "#2E3440",
+		MenuBarFg:         "#D8DEE9",
+		MenuBarBg:         "#12151B",
+		DockFg:            "#D8DEE9",
+		DockBg:            "#12151B",
+		DockAccentBg:      "#434C5E",
+		DesktopBg:         "#2E3440",
+		AccentColor:       "#88C0D0",
+		AccentFg:          "#2E3440",
+		SubtleFg:          "#4C566A",
+		ButtonYesBg:       "#A3BE8C",
+		ButtonNoBg:        "#BF616A",
+		ButtonFg:          "#2E3440",
+		DesktopPatternChar: '·',
+		DesktopPatternFg:   "#353B49",
+		TitleBarHeight:    1,
+		UnfocusedFade:     0.35,
+		ANSIPalette: [16]string{
+			"#3B4252", "#BF616A", "#A3BE8C", "#EBCB8B",
+			"#81A1C1", "#B48EAD", "#88C0D0", "#E5E9F0",
+			"#4C566A", "#BF616A", "#A3BE8C", "#EBCB8B",
+			"#81A1C1", "#B48EAD", "#88C0D0", "#ECEFF4",
+		},
+	}
+	t.ParseColors()
+	return t
+}

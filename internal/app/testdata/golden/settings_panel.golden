@@ -1,0 +1,24 @@
+ File  Edit  Apps  View  Help                                         NORMAL
+░╭────────────────────────────────────────────────────────────────────────────╮░
+░│                                                                            │░
+░│                                  Settings                                  │░
+░│                                                                            │░
+░│   General    Dock    Workspace    Keybindings    Wallpaper    Widgets│░
+░│  ────────────────────────────────────────────────────────────────────────  │░
+░│                                                                            │░
+░│  Theme                                                        ◀ Retro ▶    │░
+░│  Terminal Theme                                             ◀ inherit ▶    │░
+░│  Animations                                                         [✓]    │░
+░│  Animation Speed                                             ◀ normal ▶    │░
+░│  Animation Style                                             ◀ smooth ▶    │░
+░│  Desktop Clock                                                      [ ]    │░
+░│  Show Keys Overlay                                                  [ ]    │░
+░│  Tiling Mode                                                        [ ]    │░
+░│  Default to Terminal Mode                                           [ ]    │░
+░│  Focus Follows Mouse                                                [ ]    │░
+░│  Quake Height (%)                                                ◀ 40 ▶    │░
+░│                                                                            │░
+░│  ────────────────────────────────────────────────────────────────────────  │░
+░│  Tab/click sections │ ↑↓ nav │ Enter/click toggle │ ←→ cycle │ Esc close   │░
+░│                                                                            │░
+ ╰────────────────────────────────────────────────────────────────────────────╯│

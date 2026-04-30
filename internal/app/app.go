@@ -46,138 +46,142 @@ type backgroundWorkspace struct {
 
 // Model is the root model for the termdesk application.
 type Model struct {
-	width                   int
-	height                  int
-	ready                   bool
-	wm                      *window.Manager
-	theme                   config.Theme
-	drag                    window.DragState
-	terminals               map[string]*terminal.Terminal
-	menuBar                 *menubar.MenuBar
-	dock                    *dock.Dock
-	launcher                *launcher.Launcher
-	clipboard               *clipboard.Clipboard
-	notifications           *notification.Manager
-	settings                *settings.Panel
-	progRef                 *programRef // shared program reference for goroutine messaging
-	exposeMode              bool        // exposé overview mode
-	exposeFilter            string      // exposé search filter (case-insensitive title match)
-	inputMode               InputMode   // current input mode (Normal/Terminal/Copy)
-	dockFocused             bool        // true when dock has keyboard focus in Normal mode
-	menuBarFocused          bool        // true when menu bar has keyboard focus via Tab cycling
-	menuBarFocusIdx         int         // focused menu label index during Tab cycling
-	tabCycleCount           int         // counts consecutive Tab presses in one direction
-	tabCycleDir             int         // +1 for Tab, -1 for Shift+Tab; reset on direction change
-	contextMenu             *contextmenu.Menu
-	confirmClose            *ConfirmDialog
-	renameDialog            *RenameDialog
-	bufferNameDialog        *BufferNameDialog
-	newWorkspaceDialog      *NewWorkspaceDialog
-	themePicker             *ThemePickerDialog
-	registry                []registry.RegistryEntry
-	widgetBar               *widget.Bar
-	widgetRegistry          *widget.Registry
-	customWidgets           map[string]*widget.ShellWidget
-	enabledWidgets          []string
-	barUsername              string // preserved for widget bar rebuilds
-	barDisplayName          string // preserved for widget bar rebuilds
-	exePath                 string
-	animations              []Animation   // active animations
-	modal                   *ModalOverlay // help, about, or other modal
-	keybindings             config.KeyBindings
-	actionMap               map[string]string             // key string → action name (reverse lookup)
-	prefixPending           bool                          // true when prefix key pressed, waiting for action
+	width              int
+	height             int
+	ready              bool
+	wm                 *window.Manager
+	theme              config.Theme
+	drag               window.DragState
+	terminals          map[string]*terminal.Terminal
+	menuBar            *menubar.MenuBar
+	dock               *dock.Dock
+	launcher           *launcher.Launcher
+	clipboard          *clipboard.Clipboard
+	notifications      *notification.Manager
+	settings           *settings.Panel
+	progRef            *programRef // shared program reference for goroutine messaging
+	exposeMode         bool        // exposé overview mode
+	exposeFilter       string      // exposé search filter (case-insensitive title match)
+	inputMode          InputMode   // current input mode (Normal/Terminal/Copy)
+	dockFocused        bool        // true when dock has keyboard focus in Normal mode
+	menuBarFocused     bool        // true when menu bar has keyboard focus via Tab cycling
+	menuBarFocusIdx    int         // focused menu label index during Tab cycling
+	tabCycleCount      int         // counts consecutive Tab presses in one direction
+	tabCycleDir        int         // +1 for Tab, -1 for Shift+Tab; reset on direction change
+	contextMenu        *contextmenu.Menu
+	confirmClose       *ConfirmDialog
+	renameDialog       *RenameDialog
+	bufferNameDialog   *BufferNameDialog
+	newWorkspaceDialog *NewWorkspaceDialog
+	themePicker        *ThemePickerDialog
+	registry           []registry.RegistryEntry
+	widgetBar          *widget.Bar
+	widgetRegistry     *widget.Registry
+	customWidgets      map[string]*widget.ShellWidget
+	enabledWidgets     []string
+	barUsername        string // preserved for widget bar rebuilds
+	barDisplayName     string // preserved for widget bar rebuilds
+	exePath            string
+	animations         []Animation   // active animations
+	modal              *ModalOverlay // help, about, or other modal
+	keybindings        config.KeyBindings
+	actionMap          map[string]string // key string → action name (reverse lookup)
+	prefixPending      bool              // true when prefix key pressed, waiting for action
 	// Cursor is rendered natively via tea.Cursor — no manual blink tracking needed.
-	scrollOffset            int                           // scrollback offset in Copy mode (0 = live)
-	copyCursorX             int                           // copy mode cursor column (always visible in copy mode)
-	copyCursorY             int                           // copy mode cursor absolute line (0=oldest scrollback)
-	copyCount               int                           // numeric prefix for copy mode actions
-	copyLastKey             string                        // last key in copy mode (for sequences like gg)
-	copySearchActive        bool                          // copy mode search prompt active
-	copySearchQuery         string                        // current copy mode search query
-	copySearchDir           int                           // search direction: 1 forward, -1 backward
-	copySearchMatchCount    int                           // total search matches in buffer
-	copySearchMatchIdx      int                           // current match index (0-based)
-	copySnapshot            *CopySnapshot                 // frozen terminal snapshot for copy mode
-	selActive               bool                          // selection in progress
-	selDragging             bool                          // mouse drag selection in progress
-	selStart                geometry.Point                // selection start (X=col, Y=absLine)
-	selEnd                  geometry.Point                // selection end (X=col, Y=absLine)
-	cache                   *renderCache                  // shared view cache (survives value-receiver copies)
-	animationsOn            bool                          // animations enabled (persisted in config)
-	animationSpeed          string                        // animation speed: "slow", "normal", "fast"
-	animationStyle          string                        // animation style: "smooth", "snappy", "bouncy"
-	springs                 *springCache                  // cached spring presets (rebuilt on speed/style change)
-	showDeskClock           bool                          // desktop clock enabled (persisted in config)
-	showKeys                bool                          // show key press overlay (persisted in config)
-	tilingMode              bool                          // tiling mode enabled (persisted in config)
-	tilingLayout            string                        // persistent tiling layout: "columns", "rows", "all"
-	hideDockWhenMaximized   bool                          // hide dock when a window is maximized
-	hideDockApps            bool                          // hide static app shortcuts in dock
-	showResizeIndicator     bool                          // show resize dimensions overlay (debug)
-	defaultTerminalMode     bool                          // start in Terminal mode on new window focus
-	tour                    *tour.Tour                    // first-run guided tour
-	tooltipText             string                        // hover tooltip text (empty = hidden)
-	tooltipX                int                           // tooltip screen X
-	tooltipY                int                           // tooltip screen Y
-	hoverX                  int                           // last mouse X for hover tracking
-	hoverY                  int                           // last mouse Y for hover tracking
-	hoverTime               time.Time                     // when mouse stopped moving
-	hoverButtonZone         window.HitZone                // which title bar button the mouse is over
-	hoverButtonWindowID     string                        // which window the hovered button belongs to
-	hoverMenuLabel          int                           // which menu bar label is hovered (-1=none)
-	hoverWidgetName         string                        // which menubar widget is hovered (empty=none)
-	workspaceAutoSave       bool                          // whether auto-save is enabled
-	workspaceAutoSaveMin    int                           // auto-save interval in minutes
-	lastWorkspaceSave       time.Time                     // last save timestamp
-	projectConfig           *config.ProjectConfig         // project-specific config
-	autoStartTriggered      bool                          // whether autostart has run
-	workspaceRestorePending bool                          // whether workspace needs to be restored
-	workspacePickerVisible  bool                          // whether workspace picker is shown
-	workspacePickerSelected int                           // selected index in workspace picker
-	workspaceList           []string                      // discovered workspace files
-	workspaceWindowCounts   []int                         // window counts per workspace (for picker display)
-	workspaceWidget         *widget.WorkspaceWidget       // reference to workspace widget in bar
-	windowBuffers           map[string]string             // window ID → last buffer content (plain text)
-	windowCache             map[string]*windowRenderCache // window ID → cached window buffer
+	scrollOffset            int                             // scrollback offset in Copy mode (0 = live)
+	copyCursorX             int                             // copy mode cursor column (always visible in copy mode)
+	copyCursorY             int                             // copy mode cursor absolute line (0=oldest scrollback)
+	copyCount               int                             // numeric prefix for copy mode actions
+	copyLastKey             string                          // last key in copy mode (for sequences like gg)
+	copySearchActive        bool                            // copy mode search prompt active
+	copySearchQuery         string                          // current copy mode search query
+	copySearchDir           int                             // search direction: 1 forward, -1 backward
+	copySearchMatchCount    int                             // total search matches in buffer
+	copySearchMatchIdx      int                             // current match index (0-based)
+	copySnapshot            *CopySnapshot                   // frozen terminal snapshot for copy mode
+	selActive               bool                            // selection in progress
+	selDragging             bool                            // mouse drag selection in progress
+	selStart                geometry.Point                  // selection start (X=col, Y=absLine)
+	selEnd                  geometry.Point                  // selection end (X=col, Y=absLine)
+	pendingSelActive        bool                            // press in non-mouse-mode terminal awaiting first motion to start a selection
+	pendingSelTermID        string                          // terminal ID where the press happened (windowID, paneID, or quakeTermID)
+	pendingSelLocalX        int                             // press X in terminal-local coords
+	pendingSelLocalY        int                             // press Y in terminal-local coords
+	cache                   *renderCache                    // shared view cache (survives value-receiver copies)
+	animationsOn            bool                            // animations enabled (persisted in config)
+	animationSpeed          string                          // animation speed: "slow", "normal", "fast"
+	animationStyle          string                          // animation style: "smooth", "snappy", "bouncy"
+	springs                 *springCache                    // cached spring presets (rebuilt on speed/style change)
+	showDeskClock           bool                            // desktop clock enabled (persisted in config)
+	showKeys                bool                            // show key press overlay (persisted in config)
+	tilingMode              bool                            // tiling mode enabled (persisted in config)
+	tilingLayout            string                          // persistent tiling layout: "columns", "rows", "all"
+	hideDockWhenMaximized   bool                            // hide dock when a window is maximized
+	hideDockApps            bool                            // hide static app shortcuts in dock
+	showResizeIndicator     bool                            // show resize dimensions overlay (debug)
+	defaultTerminalMode     bool                            // start in Terminal mode on new window focus
+	tour                    *tour.Tour                      // first-run guided tour
+	tooltipText             string                          // hover tooltip text (empty = hidden)
+	tooltipX                int                             // tooltip screen X
+	tooltipY                int                             // tooltip screen Y
+	hoverX                  int                             // last mouse X for hover tracking
+	hoverY                  int                             // last mouse Y for hover tracking
+	hoverTime               time.Time                       // when mouse stopped moving
+	hoverButtonZone         window.HitZone                  // which title bar button the mouse is over
+	hoverButtonWindowID     string                          // which window the hovered button belongs to
+	hoverMenuLabel          int                             // which menu bar label is hovered (-1=none)
+	hoverWidgetName         string                          // which menubar widget is hovered (empty=none)
+	workspaceAutoSave       bool                            // whether auto-save is enabled
+	workspaceAutoSaveMin    int                             // auto-save interval in minutes
+	lastWorkspaceSave       time.Time                       // last save timestamp
+	projectConfig           *config.ProjectConfig           // project-specific config
+	autoStartTriggered      bool                            // whether autostart has run
+	workspaceRestorePending bool                            // whether workspace needs to be restored
+	workspacePickerVisible  bool                            // whether workspace picker is shown
+	workspacePickerSelected int                             // selected index in workspace picker
+	workspaceList           []string                        // discovered workspace files
+	workspaceWindowCounts   []int                           // window counts per workspace (for picker display)
+	workspaceWidget         *widget.WorkspaceWidget         // reference to workspace widget in bar
+	windowBuffers           map[string]string               // window ID → last buffer content (plain text)
+	windowCache             map[string]*windowRenderCache   // window ID → cached window buffer
 	backgroundWorkspaces    map[string]*backgroundWorkspace // workspace path → stashed WM + terminals
-	activeWorkspacePath     string                        // currently active workspace path (for stashing)
-	showKeysEvents          []showKeyEvent                // recent key events for show-keys overlay
-	minimizedTileSlots      map[string]int                // window ID -> prior tile slot before minimize
-	termCreatedAt           map[string]time.Time          // window ID → terminal creation time (for stuck detection)
-	termHasOutput           map[string]bool               // window ID → true once first PtyOutputMsg arrives
-	paneRedirect            map[string]string             // old pane ID → window ID (after split-to-single revert)
-	lastWindowSizeAt        time.Time                     // timestamp of latest WindowSizeMsg
-	focusFollowsMouse       bool                          // auto-focus window under mouse cursor
-	syncPanes               bool                          // broadcast input to all visible terminals
-	quakeTerminal           *terminal.Terminal             // standalone quake dropdown terminal (not a window)
-	quakeVisible            bool                          // whether quake terminal is currently shown
-	quakeAnimH              float64                       // current animated height (0 = hidden)
-	quakeAnimVel            float64                       // animation velocity for spring physics
-	quakeTargetH            float64                       // target height (0 or full quake height)
-	quakeHeightPct          int                           // quake height as % of screen (default 40, configurable)
-	quakeDragActive         bool                          // true while dragging quake bottom border
-	quakeDragStartY         int                           // mouse Y at drag start
-	quakeDragStartH         int                           // quake height at drag start
-	tileSpawnPreset         string                        // next tiled-window placement hint: auto,left,right,up,down
-	cellPixelW              int                           // cell width in pixels (from real terminal)
-	cellPixelH              int                           // cell height in pixels (from real terminal)
-	kittyPass               *terminal.KittyPassthrough    // Kitty graphics passthrough (shared across windows)
-	kittyPending            *kittyPendingBuf              // pending Kitty output flushed via tea.Raw() (shared pointer)
-	imagePass               *terminal.ImagePassthrough    // Sixel/iTerm2 image passthrough (shared across windows)
-	imagePending            *imagePendingBuf              // pending image output flushed via tea.Raw() (shared pointer)
-	imageState              *imageSuppressionState         // shared pointer for image hide/show state
-	perf                    *perfTracker                   // render performance tracker (TERMDESK_PERF=1)
-	wallpaperMode           string                         // "theme", "color", "pattern", "program"
-	wallpaperColor          string                         // hex color for solid color mode
-	wallpaperPattern        string                         // pattern char(s) for pattern mode
-	wallpaperPatternFg      string                         // pattern foreground hex
-	wallpaperPatternBg      string                         // pattern background hex
-	wallpaperProgram        string                         // command for program wallpaper
-	wallpaperTerminal       *terminal.Terminal             // headless terminal for program wallpaper
-	wallpaperConfig         *WallpaperConfig               // pre-computed wallpaper config for rendering
-	wallpaperLaunchFailures int                            // consecutive spawn failures (for backoff)
-	wallpaperLastLaunch     time.Time                      // timestamp of last spawn attempt (for backoff)
+	activeWorkspacePath     string                          // currently active workspace path (for stashing)
+	showKeysEvents          []showKeyEvent                  // recent key events for show-keys overlay
+	minimizedTileSlots      map[string]int                  // window ID -> prior tile slot before minimize
+	termCreatedAt           map[string]time.Time            // window ID → terminal creation time (for stuck detection)
+	termHasOutput           map[string]bool                 // window ID → true once first PtyOutputMsg arrives
+	paneRedirect            map[string]string               // old pane ID → window ID (after split-to-single revert)
+	lastWindowSizeAt        time.Time                       // timestamp of latest WindowSizeMsg
+	focusFollowsMouse       bool                            // auto-focus window under mouse cursor
+	syncPanes               bool                            // broadcast input to all visible terminals
+	quakeTerminal           *terminal.Terminal              // standalone quake dropdown terminal (not a window)
+	quakeVisible            bool                            // whether quake terminal is currently shown
+	quakeAnimH              float64                         // current animated height (0 = hidden)
+	quakeAnimVel            float64                         // animation velocity for spring physics
+	quakeTargetH            float64                         // target height (0 or full quake height)
+	quakeHeightPct          int                             // quake height as % of screen (default 40, configurable)
+	quakeDragActive         bool                            // true while dragging quake bottom border
+	quakeDragStartY         int                             // mouse Y at drag start
+	quakeDragStartH         int                             // quake height at drag start
+	tileSpawnPreset         string                          // next tiled-window placement hint: auto,left,right,up,down
+	cellPixelW              int                             // cell width in pixels (from real terminal)
+	cellPixelH              int                             // cell height in pixels (from real terminal)
+	kittyPass               *terminal.KittyPassthrough      // Kitty graphics passthrough (shared across windows)
+	kittyPending            *kittyPendingBuf                // pending Kitty output flushed via tea.Raw() (shared pointer)
+	imagePass               *terminal.ImagePassthrough      // Sixel/iTerm2 image passthrough (shared across windows)
+	imagePending            *imagePendingBuf                // pending image output flushed via tea.Raw() (shared pointer)
+	imageState              *imageSuppressionState          // shared pointer for image hide/show state
+	perf                    *perfTracker                    // render performance tracker (TERMDESK_PERF=1)
+	wallpaperMode           string                          // "theme", "color", "pattern", "program"
+	wallpaperColor          string                          // hex color for solid color mode
+	wallpaperPattern        string                          // pattern char(s) for pattern mode
+	wallpaperPatternFg      string                          // pattern foreground hex
+	wallpaperPatternBg      string                          // pattern background hex
+	wallpaperProgram        string                          // command for program wallpaper
+	wallpaperTerminal       *terminal.Terminal              // headless terminal for program wallpaper
+	wallpaperConfig         *WallpaperConfig                // pre-computed wallpaper config for rendering
+	wallpaperLaunchFailures int                             // consecutive spawn failures (for backoff)
+	wallpaperLastLaunch     time.Time                       // timestamp of last spawn attempt (for backoff)
 }
 
 // kittyPendingBuf accumulates Kitty graphics output during Update().

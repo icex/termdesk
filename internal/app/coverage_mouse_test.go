@@ -398,7 +398,8 @@ func TestCovMouseClickOnDockArea(t *testing.T) {
 	m := setupReadyModel()
 	m.inputMode = ModeTerminal
 
-	click := tea.MouseClickMsg(tea.Mouse{X: 5, Y: m.height - 1, Button: tea.MouseLeft})
+	emptyX := firstEmptyDockX(t, m)
+	click := tea.MouseClickMsg(tea.Mouse{X: emptyX, Y: m.height - 1, Button: tea.MouseLeft})
 	updated, _ := m.Update(click)
 	model := updated.(Model)
 
@@ -438,8 +439,8 @@ func TestCovMouseClickOnWindowContentArea(t *testing.T) {
 
 	// Click on w1's content area.
 	click := tea.MouseClickMsg(tea.Mouse{
-		X: w1.Rect.X + w1.Rect.Width/2,
-		Y: w1.Rect.Y + w1.Rect.Height/2,
+		X:      w1.Rect.X + w1.Rect.Width/2,
+		Y:      w1.Rect.Y + w1.Rect.Height/2,
 		Button: tea.MouseLeft,
 	})
 	updated, _ := m.Update(click)
@@ -479,8 +480,8 @@ func TestCovMouseClickInsideModalAbsorbed(t *testing.T) {
 
 	// Click inside the modal.
 	click := tea.MouseClickMsg(tea.Mouse{
-		X: bounds.StartX + bounds.BoxW/2,
-		Y: bounds.StartY + bounds.BoxH/2,
+		X:      bounds.StartX + bounds.BoxW/2,
+		Y:      bounds.StartY + bounds.BoxH/2,
 		Button: tea.MouseLeft,
 	})
 	updated, _ := m.Update(click)
@@ -507,8 +508,8 @@ func TestCovMouseClickModalTabClick(t *testing.T) {
 	// Click on a position in the tab row to switch to a different tab.
 	firstTabW := runeLen(m.modal.TabLabel(0)) + 2
 	click := tea.MouseClickMsg(tea.Mouse{
-		X: bounds.StartX + 1 + bounds.HPad + firstTabW + 1,
-		Y: bounds.TabRow,
+		X:      bounds.StartX + 1 + bounds.HPad + firstTabW + 1,
+		Y:      bounds.TabRow,
 		Button: tea.MouseLeft,
 	})
 	updated, _ := m.Update(click)
@@ -1164,8 +1165,8 @@ func TestCovHandleMouseMotionSeparatorDrag(t *testing.T) {
 	leftID := "pane-left"
 	rightID := "pane-right"
 	w.SplitRoot = &window.SplitNode{
-		Dir:      window.SplitHorizontal,
-		Ratio:    0.5,
+		Dir:   window.SplitHorizontal,
+		Ratio: 0.5,
 		Children: [2]*window.SplitNode{
 			{TermID: leftID},
 			{TermID: rightID},

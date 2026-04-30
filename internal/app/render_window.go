@@ -91,7 +91,6 @@ func remapPaletteColor(c color.Color, palette *[16]color.Color) color.Color {
 	return c
 }
 
-
 // RenderWindow draws a single window (border + title bar + content) into the buffer.
 // showCursor controls whether the terminal cursor is rendered (false = blink-off phase).
 // scrollOffset > 0 shows scrollback lines in Copy mode.
@@ -408,17 +407,20 @@ func renderWindowTerminalContentWithSnapshot(buf *Buffer, w *window.Window, them
 		}
 	}
 
-	// Desaturate + darken unfocused windows
+	// Fade unfocused windows toward the desktop background. Both fg and bg
+	// recede so the window clearly drops back on monitors with weak contrast,
+	// while keeping enough fg/bg separation to stay legible.
 	if !w.Focused && theme.UnfocusedFade > 0 {
 		dimBg := c.DesktopBg
 		for y := contentRect.Y; y < contentRect.Bottom(); y++ {
 			for x := contentRect.X; x < contentRect.Right(); x++ {
 				if x >= 0 && x < buf.Width && y >= 0 && y < buf.Height {
 					cell := &buf.Cells[y][x]
-					cell.Fg = desaturateColor(cell.Fg, theme.UnfocusedFade)
+					dFg := desaturateColor(cell.Fg, theme.UnfocusedFade)
+					cell.Fg = blendColor(dFg, dimBg, theme.UnfocusedFade*0.40)
 					dBg := desaturateColor(cell.Bg, theme.UnfocusedFade)
-					dBg = darkenColor(dBg, 1.0-theme.UnfocusedFade*0.15)
-					cell.Bg = blendColor(dBg, dimBg, theme.UnfocusedFade*0.3)
+					dBg = darkenColor(dBg, 1.0-theme.UnfocusedFade*0.30)
+					cell.Bg = blendColor(dBg, dimBg, theme.UnfocusedFade*0.60)
 				}
 			}
 		}
@@ -1100,4 +1102,3 @@ func renderExitedOverlay(buf *Buffer, w *window.Window, theme config.Theme) {
 		}
 	}
 }
-

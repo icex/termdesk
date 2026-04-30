@@ -112,17 +112,20 @@ func renderSplitWindow(buf *Buffer, w *window.Window, theme config.Theme,
 			}
 		}
 
-		// Desaturate + darken unfocused windows entirely
+		// Fade unfocused windows toward the desktop background. Mirrors the
+		// formula in renderWindowTerminalContent so split windows recede the
+		// same way as plain ones.
 		if !w.Focused && theme.UnfocusedFade > 0 {
 			dimBg := c.DesktopBg
 			for y := p.Rect.Y; y < p.Rect.Bottom(); y++ {
 				for x := p.Rect.X; x < p.Rect.Right(); x++ {
 					if x >= 0 && x < buf.Width && y >= 0 && y < buf.Height {
 						cell := &buf.Cells[y][x]
-						cell.Fg = desaturateColor(cell.Fg, theme.UnfocusedFade)
+						dFg := desaturateColor(cell.Fg, theme.UnfocusedFade)
+						cell.Fg = blendColor(dFg, dimBg, theme.UnfocusedFade*0.40)
 						dBg := desaturateColor(cell.Bg, theme.UnfocusedFade)
-						dBg = darkenColor(dBg, 1.0-theme.UnfocusedFade*0.15)
-						cell.Bg = blendColor(dBg, dimBg, theme.UnfocusedFade*0.3)
+						dBg = darkenColor(dBg, 1.0-theme.UnfocusedFade*0.30)
+						cell.Bg = blendColor(dBg, dimBg, theme.UnfocusedFade*0.60)
 					}
 				}
 			}

@@ -278,6 +278,103 @@ func TestNormalClickStaysTerminal(t *testing.T) {
 	}
 }
 
+func TestDragInTerminalEntersCopyMode(t *testing.T) {
+	m := setupReadyModel()
+
+	// /bin/echo exits immediately and never enables mouse mode → HasMouseMode is false.
+	m.openTerminalWindowWith("/bin/echo", []string{"test"}, "Test", "")
+	m = completeAnimations(m)
+
+	w := m.wm.Windows()[0]
+	m.wm.FocusWindow(w.ID)
+	m.inputMode = ModeTerminal
+
+	cr := w.ContentRect()
+	clickX := cr.X + 5
+	clickY := cr.Y + 2
+
+	// Plain left-click stashes a pending selection but doesn't enter copy mode yet.
+	updated, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: clickX, Y: clickY, Button: tea.MouseLeft}))
+	m = updated.(Model)
+
+	if m.inputMode != ModeTerminal {
+		t.Errorf("click alone should stay in ModeTerminal, got %v", m.inputMode)
+	}
+	if !m.pendingSelActive {
+		t.Fatal("expected pendingSelActive after click in non-mouse-mode terminal")
+	}
+	if m.pendingSelTermID != w.ID {
+		t.Errorf("pendingSelTermID = %q, want %q", m.pendingSelTermID, w.ID)
+	}
+
+	// First drag motion should promote the pending selection into copy mode.
+	motionX := clickX + 10
+	motionY := clickY + 1
+	updated, _ = m.Update(tea.MouseMotionMsg(tea.Mouse{X: motionX, Y: motionY, Button: tea.MouseLeft}))
+	m = updated.(Model)
+
+	if m.inputMode != ModeCopy {
+		t.Errorf("expected ModeCopy after drag motion, got %v", m.inputMode)
+	}
+	if m.pendingSelActive {
+		t.Error("pendingSelActive should be cleared after promotion")
+	}
+	if !m.selActive || !m.selDragging {
+		t.Errorf("expected selActive=true selDragging=true, got %v %v", m.selActive, m.selDragging)
+	}
+	if m.selStart.X != 5 {
+		t.Errorf("selStart.X = %d, want 5 (local coord of click)", m.selStart.X)
+	}
+	if m.selEnd.X != 15 {
+		t.Errorf("selEnd.X = %d, want 15 (local coord of motion)", m.selEnd.X)
+	}
+
+	// Clean up terminal
+	for _, w := range m.wm.Windows() {
+		m.closeTerminal(w.ID)
+	}
+}
+
+func TestClickWithoutDragDoesNotEnterCopyMode(t *testing.T) {
+	m := setupReadyModel()
+
+	m.openTerminalWindowWith("/bin/echo", []string{"test"}, "Test", "")
+	m = completeAnimations(m)
+
+	w := m.wm.Windows()[0]
+	m.wm.FocusWindow(w.ID)
+	m.inputMode = ModeTerminal
+
+	cr := w.ContentRect()
+	clickX := cr.X + 5
+	clickY := cr.Y + 2
+
+	// Press
+	updated, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: clickX, Y: clickY, Button: tea.MouseLeft}))
+	m = updated.(Model)
+	if !m.pendingSelActive {
+		t.Fatal("press should set pendingSelActive")
+	}
+
+	// Release without any motion in between
+	updated, _ = m.Update(tea.MouseReleaseMsg(tea.Mouse{X: clickX, Y: clickY, Button: tea.MouseLeft}))
+	m = updated.(Model)
+
+	if m.pendingSelActive {
+		t.Error("pendingSelActive must be cleared on release")
+	}
+	if m.inputMode != ModeTerminal {
+		t.Errorf("click+release without drag should stay in ModeTerminal, got %v", m.inputMode)
+	}
+	if m.selActive {
+		t.Error("selection should not be active after click without drag")
+	}
+
+	for _, w := range m.wm.Windows() {
+		m.closeTerminal(w.ID)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // teaToUvButton tests
 // ---------------------------------------------------------------------------
@@ -848,12 +945,27 @@ func TestMouseClickOnEmptyDockPreservesMode(t *testing.T) {
 	m := setupReadyModel()
 	m.inputMode = ModeTerminal
 
-	click := tea.MouseClickMsg(tea.Mouse{X: 0, Y: m.height - 1, Button: tea.MouseLeft})
+	emptyX := firstEmptyDockX(t, m)
+	click := tea.MouseClickMsg(tea.Mouse{X: emptyX, Y: m.height - 1, Button: tea.MouseLeft})
 	updated, _ := m.Update(click)
 	model := updated.(Model)
 	if model.inputMode != ModeTerminal {
 		t.Errorf("clicking empty dock area should preserve terminal mode, got %v", model.inputMode)
 	}
+}
+
+// firstEmptyDockX returns an X coordinate on the dock row that hits no item.
+// The dock starts at X=0 with the launcher icon, so historical hard-coded
+// values like 0 or 5 land on items now that the layout is more compact.
+func firstEmptyDockX(t *testing.T, m Model) int {
+	t.Helper()
+	for x := m.width - 1; x >= 0; x-- {
+		if m.dock.ItemAtX(x) < 0 {
+			return x
+		}
+	}
+	t.Fatal("no empty X on dock row — layout fills the entire width")
+	return 0
 }
 
 func TestMouseClickOnMenuBarClosesMenu(t *testing.T) {

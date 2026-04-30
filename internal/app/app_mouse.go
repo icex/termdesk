@@ -83,6 +83,13 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 			} else if m.quakeTerminal.HasMouseMode() {
 				btn := teaToUvButton(mouse.Button)
 				m.quakeTerminal.SendMouse(btn, mouse.X, mouse.Y, false)
+			} else if mouse.Button == tea.MouseLeft {
+				// Plain left-press in a terminal that doesn't track mouse:
+				// stash a pending selection that promotes to copy mode on first drag.
+				m.pendingSelActive = true
+				m.pendingSelTermID = quakeTermID
+				m.pendingSelLocalX = mouse.X
+				m.pendingSelLocalY = mouse.Y
 			}
 			return m, nil
 		}
@@ -528,6 +535,12 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 							localY := mouse.Y - pane.Rect.Y
 							btn := teaToUvButton(mouse.Button)
 							term.SendMouse(btn, localX, localY, false)
+							if mouse.Button == tea.MouseLeft && !term.HasMouseMode() {
+								m.pendingSelActive = true
+								m.pendingSelTermID = pane.TermID
+								m.pendingSelLocalX = localX
+								m.pendingSelLocalY = localY
+							}
 						}
 					}
 					break
@@ -566,6 +579,12 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 				localY := mouse.Y - contentRect.Y
 				btn := teaToUvButton(mouse.Button)
 				term.SendMouse(btn, localX, localY, false)
+				if mouse.Button == tea.MouseLeft && !term.HasMouseMode() {
+					m.pendingSelActive = true
+					m.pendingSelTermID = w.ID
+					m.pendingSelLocalX = localX
+					m.pendingSelLocalY = localY
+				}
 			}
 		}
 
@@ -617,6 +636,14 @@ func (m Model) handleMouseMotion(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 			m.quakeHeightPct = 90
 		}
 		return m, nil
+	}
+
+	// Promote a deferred press to copy-mode selection on the first drag motion.
+	// Triggered by clicks in terminals whose running app doesn't track mouse.
+	if m.pendingSelActive {
+		if m.promotePendingSelection(mouse) {
+			return m, nil
+		}
 	}
 
 	// Copy mode: extend selection on drag
@@ -946,6 +973,10 @@ func (m Model) handleMouseMotion(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleMouseRelease(mouse tea.Mouse) (tea.Model, tea.Cmd) {
+	// A pending selection that was never promoted means the user clicked
+	// without dragging — discard it.
+	m.pendingSelActive = false
+
 	// Finalize quake drag resize
 	if m.quakeDragActive {
 		m.quakeDragActive = false
@@ -1316,6 +1347,107 @@ func (m Model) launcherBounds() (x, y, w, h int) {
 		startY = 1
 	}
 	return startX, startY, totalW, totalH
+}
+
+// promotePendingSelection turns a deferred mouse press into an active
+// copy-mode selection on the first drag motion. Returns true if the pending
+// state was consumed (whether or not a selection was actually started).
+func (m *Model) promotePendingSelection(mouse tea.Mouse) bool {
+	termID := m.pendingSelTermID
+	startLocalX := m.pendingSelLocalX
+	startLocalY := m.pendingSelLocalY
+
+	// Quake terminal
+	if termID == quakeTermID {
+		if !m.quakeVisible || m.quakeTerminal == nil {
+			m.pendingSelActive = false
+			return false
+		}
+		contentH := int(m.quakeAnimH) - 1
+		if contentH < 1 {
+			contentH = 1
+		}
+		curX := mouse.X
+		curY := mouse.Y
+		if curX == startLocalX && curY == startLocalY {
+			return false // no motion yet
+		}
+		termW := m.quakeTerminal.Width()
+		if curX < 0 {
+			curX = 0
+		}
+		if curX >= termW {
+			curX = termW - 1
+		}
+		if curY < 0 {
+			curY = 0
+		}
+		if curY >= contentH {
+			curY = contentH - 1
+		}
+		m.enterCopyModeForQuake()
+		sbLen := m.quakeTerminal.ScrollbackLen()
+		if snap := m.copySnapshotForWindow(quakeTermID); snap != nil {
+			sbLen = snap.ScrollbackLen()
+		}
+		startAbs := mouseToAbsLine(startLocalY, m.scrollOffset, sbLen, contentH)
+		endAbs := mouseToAbsLine(curY, m.scrollOffset, sbLen, contentH)
+		m.selStart = geometry.Point{X: startLocalX, Y: startAbs}
+		m.selEnd = geometry.Point{X: curX, Y: endAbs}
+		m.copyCursorX = curX
+		m.copyCursorY = endAbs
+		m.selActive = true
+		m.selDragging = true
+		m.pendingSelActive = false
+		return true
+	}
+
+	// Regular window or split pane
+	pw := m.windowForTerminal(termID)
+	term := m.terminals[termID]
+	if pw == nil || term == nil {
+		m.pendingSelActive = false
+		return false
+	}
+	var cr geometry.Rect
+	if pw.IsSplit() {
+		cr = m.paneRectForTerm(pw, termID)
+	} else {
+		cr = pw.ContentRect()
+	}
+	curX := mouse.X - cr.X
+	curY := mouse.Y - cr.Y
+	if curX == startLocalX && curY == startLocalY {
+		return false // no motion yet
+	}
+	termW := term.Width()
+	if curX < 0 {
+		curX = 0
+	}
+	if curX >= termW {
+		curX = termW - 1
+	}
+	if curY < 0 {
+		curY = 0
+	}
+	if curY >= cr.Height {
+		curY = cr.Height - 1
+	}
+	m.enterCopyModeForWindow(termID)
+	sbLen := term.ScrollbackLen()
+	if snap := m.copySnapshotForWindow(termID); snap != nil {
+		sbLen = snap.ScrollbackLen()
+	}
+	startAbs := mouseToAbsLine(startLocalY, m.scrollOffset, sbLen, cr.Height)
+	endAbs := mouseToAbsLine(curY, m.scrollOffset, sbLen, cr.Height)
+	m.selStart = geometry.Point{X: startLocalX, Y: startAbs}
+	m.selEnd = geometry.Point{X: curX, Y: endAbs}
+	m.copyCursorX = curX
+	m.copyCursorY = endAbs
+	m.selActive = true
+	m.selDragging = true
+	m.pendingSelActive = false
+	return true
 }
 
 // teaToUvButton converts a Bubble Tea mouse button to an ultraviolet MouseButton.

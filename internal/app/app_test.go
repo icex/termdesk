@@ -1415,13 +1415,15 @@ func TestHandleUpdateCustomWidgetResultMsg(t *testing.T) {
 
 func TestHandleUpdatePasteMsg(t *testing.T) {
 	m := setupReadyModel()
-	// PasteMsg in non-terminal mode should do nothing
-	ret, cmd := m.Update(tea.PasteMsg{Content: "test"})
+	// PasteMsg forwards to the focused terminal regardless of mode. Without a real
+	// terminal it's a no-op — just verify no panic and that copy-mode state is
+	// cleared if we'd been in copy mode.
+	m.inputMode = ModeCopy
+	ret, _ := m.Update(tea.PasteMsg{Content: "test"})
 	model := ret.(Model)
-	if cmd != nil {
-		t.Error("expected nil cmd from PasteMsg in normal mode")
+	if model.inputMode == ModeCopy {
+		t.Error("PasteMsg should drop copy mode before delivering paste")
 	}
-	_ = model
 }
 
 func TestHandleUpdateCursorBlinkMsg(t *testing.T) {

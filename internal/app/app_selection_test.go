@@ -2,7 +2,7 @@ package app
 
 import (
 	"bytes"
-	"encoding/base64"
+	"fmt"
 	"os"
 	"testing"
 )
@@ -25,15 +25,19 @@ func captureStdout(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
-func TestWriteOSC52WritesSequence(t *testing.T) {
-	text := "hello"
-	got := captureStdout(t, func() {
-		writeOSC52(text)
-	})
+func TestOSC52SetCmdEmitsClipboardMsg(t *testing.T) {
+	cmd := osc52SetCmd("hello")
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd for non-empty text")
+	}
+	msg := cmd()
+	if got := fmt.Sprint(msg); got != "hello" {
+		t.Errorf("expected clipboard msg payload %q, got %q", "hello", got)
+	}
+}
 
-	wantPayload := base64.StdEncoding.EncodeToString([]byte(text))
-	want := "\x1b]52;c;" + wantPayload + "\x07"
-	if got != want {
-		t.Fatalf("OSC52 mismatch: got %q want %q", got, want)
+func TestOSC52SetCmdEmptyTextReturnsNil(t *testing.T) {
+	if cmd := osc52SetCmd(""); cmd != nil {
+		t.Error("expected nil cmd for empty text")
 	}
 }

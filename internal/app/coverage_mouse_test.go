@@ -438,8 +438,8 @@ func TestCovMouseClickOnWindowContentArea(t *testing.T) {
 
 	// Click on w1's content area.
 	click := tea.MouseClickMsg(tea.Mouse{
-		X: w1.Rect.X + w1.Rect.Width/2,
-		Y: w1.Rect.Y + w1.Rect.Height/2,
+		X:      w1.Rect.X + w1.Rect.Width/2,
+		Y:      w1.Rect.Y + w1.Rect.Height/2,
 		Button: tea.MouseLeft,
 	})
 	updated, _ := m.Update(click)
@@ -479,8 +479,8 @@ func TestCovMouseClickInsideModalAbsorbed(t *testing.T) {
 
 	// Click inside the modal.
 	click := tea.MouseClickMsg(tea.Mouse{
-		X: bounds.StartX + bounds.BoxW/2,
-		Y: bounds.StartY + bounds.BoxH/2,
+		X:      bounds.StartX + bounds.BoxW/2,
+		Y:      bounds.StartY + bounds.BoxH/2,
 		Button: tea.MouseLeft,
 	})
 	updated, _ := m.Update(click)
@@ -507,8 +507,8 @@ func TestCovMouseClickModalTabClick(t *testing.T) {
 	// Click on a position in the tab row to switch to a different tab.
 	firstTabW := runeLen(m.modal.TabLabel(0)) + 2
 	click := tea.MouseClickMsg(tea.Mouse{
-		X: bounds.StartX + 1 + bounds.HPad + firstTabW + 1,
-		Y: bounds.TabRow,
+		X:      bounds.StartX + 1 + bounds.HPad + firstTabW + 1,
+		Y:      bounds.TabRow,
 		Button: tea.MouseLeft,
 	})
 	updated, _ := m.Update(click)
@@ -887,17 +887,13 @@ func TestCovUpdatePasteMsgTerminalMode(t *testing.T) {
 }
 
 func TestCovUpdatePasteMsgNonTerminalMode(t *testing.T) {
-	// PasteMsg in non-terminal mode should be a no-op.
+	// PasteMsg in non-terminal mode now still forwards to the focused terminal.
+	// Without a real terminal this is a no-op; just verify no panic.
 	m := setupReadyModel()
 	m.inputMode = ModeNormal
 
-	ret, cmd := m.Update(tea.PasteMsg{Content: "hello"})
-	model := ret.(Model)
-
-	if cmd != nil {
-		t.Error("expected nil cmd from PasteMsg in normal mode")
-	}
-	_ = model
+	ret, _ := m.Update(tea.PasteMsg{Content: "hello"})
+	_ = ret.(Model)
 }
 
 func TestCovUpdateAutoStartMsgNoPanic(t *testing.T) {
@@ -1164,8 +1160,8 @@ func TestCovHandleMouseMotionSeparatorDrag(t *testing.T) {
 	leftID := "pane-left"
 	rightID := "pane-right"
 	w.SplitRoot = &window.SplitNode{
-		Dir:      window.SplitHorizontal,
-		Ratio:    0.5,
+		Dir:   window.SplitHorizontal,
+		Ratio: 0.5,
 		Children: [2]*window.SplitNode{
 			{TermID: leftID},
 			{TermID: rightID},

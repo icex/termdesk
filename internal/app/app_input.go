@@ -67,6 +67,8 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			actionHint = "copy_mode"
 		case "y":
 			actionHint = "clipboard_history"
+		case "]":
+			actionHint = "paste"
 		case "d":
 			actionHint = "detach"
 		case "\"":
@@ -746,6 +748,11 @@ func (m Model) handlePrefixAction(msg tea.KeyPressMsg, key string) (tea.Model, t
 	if key == "y" {
 		m.clipboard.ShowHistory()
 		return m, nil
+	}
+
+	// prefix+] → paste most-recent clipboard entry into focused terminal (tmux convention)
+	if key == "]" {
+		return m.executeAction("paste", msg, key)
 	}
 
 	// prefix+d → detach session (like tmux prefix+d)

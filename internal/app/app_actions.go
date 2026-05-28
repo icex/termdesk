@@ -75,15 +75,15 @@ var terminalStayActions = map[string]bool{
 	"swap_right":          true,
 	"swap_up":             true,
 	"swap_down":           true,
-	"split_horizontal": true,
-	"split_vertical":   true,
-	"close_pane":       true,
-	"next_pane":        true,
-	"prev_pane":        true,
-	"pane_left":        true,
-	"pane_right":       true,
-	"pane_up":          true,
-	"pane_down":        true,
+	"split_horizontal":    true,
+	"split_vertical":      true,
+	"close_pane":          true,
+	"next_pane":           true,
+	"prev_pane":           true,
+	"pane_left":           true,
+	"pane_right":          true,
+	"pane_up":             true,
+	"pane_down":           true,
 }
 
 func (m *Model) persistTilingSettings() {
@@ -144,8 +144,8 @@ func (m Model) executeAction(action string, msg tea.KeyPressMsg, key string) (te
 	// leak visually during close/minimize animations.
 	if m.inputMode == ModeCopy {
 		m.exitCopyMode()
-		// exitCopyMode sets ModeTerminal; the wasTerminal checks below
-		// will set ModeNormal where needed for overlays/dialogs.
+		// exitCopyMode lands in ModeNormal; the wasTerminal branches below
+		// override to ModeTerminal/Normal where appropriate.
 	}
 
 	switch action {
@@ -806,8 +806,8 @@ func (m Model) executeMenuAction(action string) (tea.Model, tea.Cmd) {
 				}
 				text := extractSelTextWithSnapshot(term, snap, m.selStart, m.selEnd)
 				if text != "" {
-					writeOSC52(text)
 					m.clipboard.Copy(text)
+					return m, osc52SetCmd(text)
 				}
 			}
 		}

@@ -191,8 +191,8 @@ func TestCUUpdatePtyClosedMsgTilingMode(t *testing.T) {
 	// Start a close animation so isAnimatingClose returns true
 	if m.animationsOn {
 		center := geometry.Rect{
-			X: w1.Rect.X + w1.Rect.Width/2,
-			Y: w1.Rect.Y + w1.Rect.Height/2,
+			X:     w1.Rect.X + w1.Rect.Width/2,
+			Y:     w1.Rect.Y + w1.Rect.Height/2,
 			Width: 1, Height: 1,
 		}
 		m.startWindowAnimation(w1ID, AnimClose, w1.Rect, center)
@@ -1140,11 +1140,9 @@ func TestCUUpdatePasteMsgNormalMode(t *testing.T) {
 	m := setupReadyModel()
 	m.inputMode = ModeNormal
 
-	// PasteMsg in non-terminal mode should be no-op
-	ret, cmd := m.Update(tea.PasteMsg{Content: "paste content"})
-	if cmd != nil {
-		t.Error("expected nil cmd from PasteMsg in normal mode")
-	}
+	// PasteMsg now forwards regardless of mode. Without a real terminal this is a
+	// no-op — just verify the mode stays sensible and there's no panic.
+	ret, _ := m.Update(tea.PasteMsg{Content: "paste content"})
 	_ = ret.(Model)
 }
 

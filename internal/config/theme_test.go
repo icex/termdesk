@@ -77,8 +77,8 @@ func TestCatppuccinTheme(t *testing.T) {
 
 func TestThemeNames(t *testing.T) {
 	names := ThemeNames()
-	if len(names) != 14 {
-		t.Errorf("ThemeNames() returned %d themes, want 14", len(names))
+	if len(names) != 15 {
+		t.Errorf("ThemeNames() returned %d themes, want 15", len(names))
 	}
 	// Verify all theme names resolve
 	for _, name := range names {
@@ -434,8 +434,18 @@ func TestSleekTheme(t *testing.T) {
 	}
 }
 
+func TestModernLightTheme(t *testing.T) {
+	theme := ModernLightTheme()
+	if theme.Name != "modernlight" {
+		t.Errorf("Name = %q, want modernlight", theme.Name)
+	}
+	if !theme.IsLight() {
+		t.Error("modernlight should be a light theme")
+	}
+}
+
 func TestIsLightThemes(t *testing.T) {
-	lightThemes := []string{"redmond", "platinum", "aqua"}
+	lightThemes := []string{"redmond", "platinum", "aqua", "modernlight"}
 	for _, name := range lightThemes {
 		theme := GetTheme(name)
 		if !theme.IsLight() {

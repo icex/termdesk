@@ -41,8 +41,8 @@ func TestGeneralSectionItems(t *testing.T) {
 	if theme.StrVal != "modern" {
 		t.Errorf("default theme should be 'modern', got %q", theme.StrVal)
 	}
-	if len(theme.Choices) != 14 {
-		t.Errorf("expected 14 theme choices, got %d", len(theme.Choices))
+	if len(theme.Choices) != 15 {
+		t.Errorf("expected 15 theme choices, got %d", len(theme.Choices))
 	}
 	// Terminal theme (index 1) is a choice mirroring Theme plus an inherit sentinel
 	termTheme := gen.Items[1]

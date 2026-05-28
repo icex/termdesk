@@ -87,7 +87,7 @@ go build -o bin/termdesk ./cmd/termdesk
 - Right-click context menus, tooltips on hover
 - Clipboard with a 5-slot ring buffer and history overlay
 - Notifications (toasts + a notification center)
-- Settings panel with 6 tabs, quake terminal (`Ctrl+` backtick), wallpapers (solid / pattern / live program), 14 themes
+- Settings panel with 6 tabs, quake terminal (`Ctrl+` backtick), wallpapers (solid / pattern / live program), 15 built-in themes + user-defined themes
 - Games: Minesweeper, Snake, Solitaire, Blockdrop
 
 ## Configuration
@@ -115,6 +115,55 @@ command  = "git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '-'"
 interval = 10
 onClick  = "lazygit"
 ```
+
+### Custom themes
+
+Drop a TOML file in `~/.config/termdesk/themes/<name>.toml` and set
+`theme = "<name>"` in `config.toml`. Fields map to the `Theme` struct in
+[`internal/config/theme.go`](internal/config/theme.go); unknown keys are
+ignored and any missing field falls back to a sensible default. A file whose
+name matches a built-in (e.g. `modern.toml`) overrides that built-in.
+
+```toml
+# ~/.config/termdesk/themes/sunset.toml
+border_top_left     = "╭"
+border_top_right    = "╮"
+border_bottom_left  = "╰"
+border_bottom_right = "╯"
+border_horizontal   = "─"
+border_vertical     = "│"
+
+content_bg        = "#1A1B26"
+active_border_fg  = "#FF9E64"
+active_title_fg   = "#C0CAF5"
+menu_bar_bg       = "#16161E"
+dock_bg           = "#16161E"
+dock_accent_bg    = "#292E42"
+desktop_bg        = "#1A1B26"
+
+accent_color  = "#FF9E64"
+accent_fg     = "#1A1B26"
+subtle_fg     = "#565F89"
+button_yes_bg = "#9ECE6A"
+button_no_bg  = "#F7768E"
+button_fg     = "#1A1B26"
+
+close_button = " × "
+min_button   = " - "
+max_button   = " □ "
+
+title_bar_height = 1
+unfocused_fade   = 0.35
+
+# Optional: override the terminal-content ANSI palette (ansi0..ansi15)
+ansi0 = "#414868"
+ansi1 = "#F7768E"
+```
+
+Reload by restarting termdesk or picking the theme from the View menu.
+The fastest way to author one is to copy a bundled theme out of
+[`internal/config/`](internal/config/) (e.g. `theme_modern.go`) and translate
+it to TOML — the field names match one-to-one (snake_case also works).
 
 Per-project behaviour goes in a `.termdesk.toml` at the project root:
 

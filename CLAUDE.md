@@ -236,7 +236,12 @@ Debug log: `/tmp/termdesk-image.log`.
 - Adding a setting: touch `UserConfig` struct, `parseConfig()`, `SaveUserConfig()`,
   read it in `internal/app/app.go` `New()`, add a settings-panel entry if useful.
 - Themes: `ParseColors()` pre-parses hex → `color.Color`; access via `theme.C()`.
-  Currently 14 themes (see `internal/config/theme.go`).
+  15 built-in themes (see `internal/config/theme.go`). Users can drop
+  `<name>.toml` into `~/.config/termdesk/themes/` — `LoadCustomTheme()` reads
+  it and `GetTheme()` prefers custom files over built-ins of the same name.
+  `ThemeNames()` merges built-ins + custom so the View menu / Settings panel
+  picks custom themes up automatically. Field names in the TOML mirror the
+  `Theme` struct (snake_case accepted); see `theme_custom.go`.
 
 ## Tests
 

@@ -49,16 +49,16 @@ type Theme struct {
 	DesktopBg        string
 
 	// Accent & interaction colors
-	AccentColor  string // primary accent (menu hover bg, active tab bg, menubar highlight)
-	AccentFg     string // text on accent backgrounds
-	SubtleFg     string // dim text (shortcuts, footers, separators)
-	ButtonYesBg  string // confirm/positive button background
-	ButtonNoBg   string // cancel/destructive button background
-	ButtonFg     string // button text foreground (on colored buttons)
+	AccentColor string // primary accent (menu hover bg, active tab bg, menubar highlight)
+	AccentFg    string // text on accent backgrounds
+	SubtleFg    string // dim text (shortcuts, footers, separators)
+	ButtonYesBg string // confirm/positive button background
+	ButtonNoBg  string // cancel/destructive button background
+	ButtonFg    string // button text foreground (on colored buttons)
 
 	// Desktop background pattern
-	DesktopPatternChar rune        // pattern character (0 = none)
-	DesktopPatternFg   string      // pattern foreground color hex
+	DesktopPatternChar rune   // pattern character (0 = none)
+	DesktopPatternFg   string // pattern foreground color hex
 
 	// Default terminal foreground color (optional, hex "#RRGGBB")
 	DefaultFg string
@@ -108,7 +108,7 @@ type parsedColors struct {
 	CloseButtonFg    color.Color // optional per-button fg
 	MinButtonFg      color.Color
 	MaxButtonFg      color.Color
-	DefaultFg        color.Color // light gray #C0C0C0
+	DefaultFg        color.Color     // light gray #C0C0C0
 	ANSIPalette      [16]color.Color // ANSI 16-color palette for terminal content
 }
 
@@ -258,7 +258,6 @@ var lightANSIPalette = [16]string{
 	"#202227", // 15: bright white (dark, visible on white)
 }
 
-
 // C returns the pre-parsed colors. Panics if ParseColors hasn't been called.
 func (t *Theme) C() *parsedColors {
 	if !t.colors.parsed {
@@ -267,8 +266,14 @@ func (t *Theme) C() *parsedColors {
 	return &t.colors
 }
 
-// GetTheme returns a theme by name. Falls back to modern.
+// GetTheme returns a theme by name. Custom themes in
+// ~/.config/termdesk/themes/<name>.toml take priority over built-ins, so
+// users can override any bundled theme with a file of the same name.
+// Falls back to modern if the name matches nothing.
 func GetTheme(name string) Theme {
+	if t, ok := LoadCustomTheme(name); ok {
+		return t
+	}
 	switch name {
 	case "retro":
 		return RetroTheme()
@@ -296,6 +301,8 @@ func GetTheme(name string) Theme {
 		return SolarizedTheme()
 	case "sequoia":
 		return SequoiaTheme()
+	case "modernlight":
+		return ModernLightTheme()
 	default:
 		return ModernTheme()
 	}
@@ -309,11 +316,30 @@ func (t Theme) TitleBarRows() int {
 	return t.TitleBarHeight
 }
 
-// ThemeNames returns the names of all available themes.
+// ThemeNames returns the names of all available themes: built-ins first,
+// then any custom themes discovered in ~/.config/termdesk/themes/. A custom
+// theme whose filename matches a built-in name is not duplicated — the
+// custom file simply overrides the built-in at GetTheme() time.
 func ThemeNames() []string {
-	return []string{
-		"modern", "sleek", "retro", "tokyonight", "catppuccin",
+	builtins := []string{
+		"modern", "modernlight", "sleek", "retro", "tokyonight", "catppuccin",
 		"redmond", "platinum", "ubuntu", "aqua",
 		"springboard", "nord", "dracula", "solarized", "sequoia",
 	}
+	custom := ListCustomThemes()
+	if len(custom) == 0 {
+		return builtins
+	}
+	seen := make(map[string]bool, len(builtins))
+	for _, n := range builtins {
+		seen[n] = true
+	}
+	for _, n := range custom {
+		if seen[n] {
+			continue
+		}
+		seen[n] = true
+		builtins = append(builtins, n)
+	}
+	return builtins
 }

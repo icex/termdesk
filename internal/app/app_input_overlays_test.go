@@ -481,19 +481,21 @@ func TestCopyModeVisualSelectionAndYank(t *testing.T) {
 	model.selStart = geometry.Point{X: 0, Y: 0}
 	model.selEnd = geometry.Point{X: 4, Y: 0}
 
-	got := captureStdout(t, func() {
-		updated, _ = model.handleCopyModeKey(tea.KeyPressMsg(tea.Key{Code: 'y', Text: "y"}), "y")
-		model = updated.(Model)
-	})
+	var clipCmd tea.Cmd
+	updated, clipCmd = model.handleCopyModeKey(tea.KeyPressMsg(tea.Key{Code: 'y', Text: "y"}), "y")
+	model = updated.(Model)
 
 	if model.selActive {
 		t.Error("selection should be cleared after yank")
 	}
+	if model.inputMode == ModeCopy {
+		t.Error("y should exit copy mode after yanking")
+	}
 	if model.clipboard.Len() == 0 {
 		t.Fatal("expected clipboard to have at least one entry after yank")
 	}
-	if got == "" {
-		t.Fatal("expected OSC52 output to be written")
+	if clipCmd == nil {
+		t.Fatal("expected OSC52 clipboard cmd to be returned after yank")
 	}
 }
 
@@ -503,8 +505,8 @@ func TestCopyModeEnterExitsToTerminal(t *testing.T) {
 
 	updated, _ := m.handleCopyModeKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}), "enter")
 	model := updated.(Model)
-	if model.inputMode != ModeNormal {
-		t.Errorf("expected ModeNormal after enter, got %d", model.inputMode)
+	if model.inputMode != ModeTerminal {
+		t.Errorf("expected ModeTerminal after enter, got %d", model.inputMode)
 	}
 	if model.scrollOffset != 0 {
 		t.Error("scroll offset should reset on enter")
@@ -1779,7 +1781,7 @@ func TestCellsToStringTrailingSpaces(t *testing.T) {
 func TestCellsToStringWidthZeroSkipped(t *testing.T) {
 	cells := []terminal.ScreenCell{
 		{Content: "A", Width: 1},
-		{Content: "", Width: 0},  // wide-char continuation, skipped
+		{Content: "", Width: 0}, // wide-char continuation, skipped
 		{Content: "B", Width: 1},
 	}
 	if got := cellsToString(cells); got != "AB" {

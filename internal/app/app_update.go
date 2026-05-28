@@ -250,11 +250,16 @@ func (m Model) handleUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouseWheel(tea.Mouse(msg))
 
 	case tea.PasteMsg:
-		// Handle paste from external clipboard (Ctrl+Shift+V or terminal paste)
-		if m.inputMode == ModeTerminal {
-			if _, term := m.focusedTerminal(); term != nil {
-				term.WriteInput([]byte(msg.Content))
-			}
+		// Host clipboard paste (Cmd+V on macOS, Ctrl+Shift+V elsewhere) should always
+		// land in the focused terminal regardless of input mode. If we're in copy mode
+		// the snapshot is frozen and there's no useful place for the paste to go, so
+		// drop back to Terminal mode first.
+		if m.inputMode == ModeCopy {
+			m.exitCopyMode()
+			m.inputMode = ModeTerminal
+		}
+		if _, term := m.focusedTerminal(); term != nil {
+			term.WriteInput([]byte(msg.Content))
 		}
 		return m, nil
 
@@ -731,7 +736,6 @@ func (m Model) handleUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastWorkspaceSave = time.Now()
 		}
 		return m, tickWorkspaceAutoSave()
-
 
 	case CleanupMsg:
 		// Periodic cleanup of old notifications (keep last 20)

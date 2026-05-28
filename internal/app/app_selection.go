@@ -1,10 +1,9 @@
 package app
 
 import (
-	"encoding/base64"
-	"os"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/icex/termdesk/internal/terminal"
 	"github.com/icex/termdesk/pkg/geometry"
 )
@@ -143,12 +142,16 @@ func extractSelTextWithSnapshot(term *terminal.Terminal, snap *CopySnapshot, sta
 	return strings.Join(lines, "\n")
 }
 
-// writeOSC52 writes text to the system clipboard via OSC 52 escape sequence.
-func writeOSC52(text string) {
-	b64 := base64.StdEncoding.EncodeToString([]byte(text))
-	var seq []byte
-	seq = append(seq, "\x1b]52;c;"...)
-	seq = append(seq, b64...)
-	seq = append(seq, '\x07')
-	os.Stdout.Write(seq)
+// osc52SetCmd returns a tea.Cmd that copies text to the host system clipboard
+// via OSC 52. Routed through tea.SetClipboard so the sequence is serialized
+// with BT v2's frame output instead of racing with it on stdout.
+//
+// The outer terminal must accept OSC 52 writes — iTerm2 gates this behind
+// Preferences → General → Selection → "Applications in terminal may access
+// clipboard" (off by default). Terminal.app does not support OSC 52 at all.
+func osc52SetCmd(text string) tea.Cmd {
+	if text == "" {
+		return nil
+	}
+	return tea.SetClipboard(text)
 }

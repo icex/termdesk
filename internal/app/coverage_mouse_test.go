@@ -888,17 +888,13 @@ func TestCovUpdatePasteMsgTerminalMode(t *testing.T) {
 }
 
 func TestCovUpdatePasteMsgNonTerminalMode(t *testing.T) {
-	// PasteMsg in non-terminal mode should be a no-op.
+	// PasteMsg in non-terminal mode now still forwards to the focused terminal.
+	// Without a real terminal this is a no-op; just verify no panic.
 	m := setupReadyModel()
 	m.inputMode = ModeNormal
 
-	ret, cmd := m.Update(tea.PasteMsg{Content: "hello"})
-	model := ret.(Model)
-
-	if cmd != nil {
-		t.Error("expected nil cmd from PasteMsg in normal mode")
-	}
-	_ = model
+	ret, _ := m.Update(tea.PasteMsg{Content: "hello"})
+	_ = ret.(Model)
 }
 
 func TestCovUpdateAutoStartMsgNoPanic(t *testing.T) {

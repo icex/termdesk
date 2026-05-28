@@ -161,6 +161,10 @@ func (m Model) activateDockItem(idx int) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleCopyModeKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
+	// Accumulated tea.Cmd for OSC 52 clipboard writes that yank/copy paths queue
+	// up; returned at the end so the sequence is serialized with BT's frame output.
+	var clipCmd tea.Cmd
+
 	// Resolve terminal and content dimensions for copy mode.
 	// For quake terminal there is no focused window — use quake state directly.
 	var term *terminal.Terminal
@@ -339,19 +343,35 @@ func (m Model) handleCopyModeKey(msg tea.KeyPressMsg, key string) (tea.Model, te
 	case "y", "enter":
 		m.copyCount = 0
 		m.copyLastKey = ""
-		// Yank (copy) selected text, or just exit copy mode on enter with no selection
+		// Yank selected text (if any) and exit copy mode. Without this exit, the
+		// snapshot is nil but inputMode stays ModeCopy — keyboard appears dead.
 		if m.selActive {
 			text := extractSelTextWithSnapshot(term, snap, m.selStart, m.selEnd)
 			if text != "" {
-				writeOSC52(text)
+				clipCmd = osc52SetCmd(text)
 				m.clipboard.Copy(text)
 			}
-			m.selActive = false
-			m.clearCopySearch()
-			m.copySnapshot = nil
 		}
-		if key == "enter" {
-			m.exitCopyMode()
+		m.exitCopyMode()
+		m.inputMode = ModeTerminal
+	case "p":
+		// Paste: if selection is active, yank it first (so y+p is one keystroke).
+		// Then exit copy mode and write the most-recent clipboard entry into the
+		// focused terminal.
+		m.copyCount = 0
+		m.copyLastKey = ""
+		if m.selActive {
+			text := extractSelTextWithSnapshot(term, snap, m.selStart, m.selEnd)
+			if text != "" {
+				clipCmd = osc52SetCmd(text)
+				m.clipboard.Copy(text)
+			}
+		}
+		pasteText := m.clipboard.Paste()
+		m.exitCopyMode()
+		m.inputMode = ModeTerminal
+		if pasteText != "" {
+			term.WriteInput([]byte(pasteText))
 		}
 	case "up", "k":
 		step := 1
@@ -563,7 +583,7 @@ func (m Model) handleCopyModeKey(msg tea.KeyPressMsg, key string) (tea.Model, te
 		if lineIdx >= 0 && lineIdx < len(lines) {
 			text := strings.TrimRight(lines[lineIdx], " ")
 			if text != "" {
-				writeOSC52(text)
+				clipCmd = osc52SetCmd(text)
 				m.clipboard.Copy(text)
 			}
 		}
@@ -575,7 +595,7 @@ func (m Model) handleCopyModeKey(msg tea.KeyPressMsg, key string) (tea.Model, te
 		if m.selActive {
 			text := extractSelTextWithSnapshot(term, snap, m.selStart, m.selEnd)
 			if text != "" {
-				writeOSC52(text)
+				clipCmd = osc52SetCmd(text)
 				m.clipboard.Append(text)
 			}
 		}
@@ -695,7 +715,7 @@ func (m Model) handleCopyModeKey(msg tea.KeyPressMsg, key string) (tea.Model, te
 			setCursorPos(x, y)
 		}
 	}
-	return m, nil
+	return m, clipCmd
 }
 
 // isWordSep returns true if the rune is a word separator.

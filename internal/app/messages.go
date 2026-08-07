@@ -68,6 +68,14 @@ type BellMsg struct {
 	WindowID string
 }
 
+// TerminalClipboardMsg delivers text a child app copied via OSC 52. Apps with
+// no local clipboard access (anything over ssh, tmux, nvim with
+// clipboard=osc52) rely on this to reach the host clipboard.
+type TerminalClipboardMsg struct {
+	WindowID string
+	Text     string
+}
+
 // CustomWidgetResultMsg delivers async shell widget command results.
 type CustomWidgetResultMsg struct {
 	Results map[string]string // widget name → output (absent = command failed)

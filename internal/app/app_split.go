@@ -73,19 +73,7 @@ func (m *Model) splitPane(dir window.SplitDir) tea.Cmd {
 	}
 
 	// Create the new terminal
-	var graphicsEnv []string
-	if m.kittyPass != nil && m.kittyPass.IsEnabled() {
-		if terminal.HasKittyTerminfo() {
-			graphicsEnv = append(graphicsEnv, "TERM=xterm-kitty")
-		}
-		if tp := terminal.HostTermProgram(); tp != "" {
-			graphicsEnv = append(graphicsEnv, "TERM_PROGRAM="+tp)
-		}
-	}
-	if m.imagePass != nil && m.imagePass.Iterm2Enabled() {
-		graphicsEnv = append(graphicsEnv, "LC_TERMINAL=iTerm2")
-		graphicsEnv = append(graphicsEnv, "ITERM_SESSION_ID=termdesk-"+newTermID)
-	}
+	graphicsEnv := m.graphicsEnv(newTermID)
 	workDir := fw.WorkDir
 	if workDir == "" {
 		workDir, _ = os.Getwd()

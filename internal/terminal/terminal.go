@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
@@ -79,6 +80,10 @@ type Terminal struct {
 	onScreenClear   func() // called when child app clears the screen (e.g. `clear` command)
 	onBell          func() // called when child app sends BEL (\x07)
 	bellPending     bool   // set by emu Bell callback; fired after emu.Write returns
+
+	// Clipboard passthrough — intercepts OSC 52 from child apps.
+	onClipboard func(text string) // called when child app copies via OSC 52
+	osc52Buf    []byte            // buffer for incomplete OSC 52 sequences (emuWriteLoop only)
 
 	// Image passthrough (sixel/iTerm2) — intercepts DCS/OSC sequences from child apps.
 	onImageGraphics func(rawData []byte, format ImageFormat, estimatedCellRows int) int
@@ -470,6 +475,133 @@ func (t *Terminal) extractOSCTitles(data []byte) []byte {
 	return result
 }
 
+var osc52Prefix = []byte("\x1b]52;")
+
+// maxOSC52Payload caps how much of an unterminated OSC 52 we buffer waiting for
+// the rest. Base64 for a large yank legitimately spans many PTY reads, but an
+// app that never terminates the sequence must not pin memory forever.
+const maxOSC52Payload = 4 << 20
+
+// extractOSC52 pulls OSC 52 clipboard-set sequences out of the child's output
+// and hands the decoded text to onClipboard. The VT emulator has no OSC 52
+// handler, so without this the sequence is parsed and dropped — which is why
+// copying from an app that has no local clipboard access (Claude Code over ssh,
+// tmux, nvim with clipboard=osc52) silently did nothing.
+//
+// Buffers incomplete sequences across calls. Only called from emuWriteLoop
+// (single goroutine), before any data reaches the emulator.
+func (t *Terminal) extractOSC52(data []byte) []byte {
+	if len(t.osc52Buf) > 0 {
+		data = append(t.osc52Buf, data...)
+		t.osc52Buf = nil
+	} else if !bytes.Contains(data, osc52Prefix) {
+		return data
+	}
+
+	var result []byte
+	for {
+		idx := bytes.Index(data, osc52Prefix)
+		if idx < 0 {
+			break
+		}
+		payloadStart := idx + len(osc52Prefix)
+
+		// Scan for the terminator: BEL or 7-bit ST. Base64 contains neither,
+		// so anything else in between means the sequence is malformed.
+		end, next, aborted := -1, -1, false
+		for i := payloadStart; i < len(data); i++ {
+			if data[i] == 0x07 {
+				end, next = i, i+1
+				break
+			}
+			if data[i] != 0x1b {
+				continue
+			}
+			if i+1 >= len(data) {
+				break // ESC at the chunk edge — may yet be ESC \, wait for more
+			}
+			if data[i+1] == '\\' {
+				end, next = i, i+2
+			} else {
+				aborted = true
+			}
+			break
+		}
+
+		if aborted {
+			// Not ours to interpret. Emit the prefix so the emulator sees the
+			// sequence unchanged, and resume scanning after it so a following
+			// well-formed OSC 52 is still caught.
+			result = append(result, data[:payloadStart]...)
+			data = data[payloadStart:]
+			continue
+		}
+
+		if end < 0 {
+			result = append(result, data[:idx]...)
+			// Drop a sequence that has outgrown the cap rather than keep
+			// buffering it; the child is misbehaving either way.
+			if len(data)-idx <= maxOSC52Payload {
+				t.osc52Buf = append([]byte(nil), data[idx:]...)
+			}
+			return result
+		}
+
+		result = append(result, data[:idx]...)
+		t.handleOSC52(data[payloadStart:end])
+		data = data[next:]
+	}
+
+	return append(result, data...)
+}
+
+// handleOSC52 decodes an OSC 52 payload ("<Pc>;<Pd>") and reports the text.
+func (t *Terminal) handleOSC52(payload []byte) {
+	t.mu.Lock()
+	fn := t.onClipboard
+	t.mu.Unlock()
+	if fn == nil {
+		return
+	}
+
+	sep := bytes.IndexByte(payload, ';')
+	if sep < 0 {
+		return
+	}
+	pc, pd := payload[:sep], payload[sep+1:]
+
+	// "?" is a read query. Answering would mean handing the host clipboard to
+	// the child, which we can't read — swallow it rather than reply wrongly.
+	if len(pd) == 0 || bytes.Equal(pd, []byte("?")) {
+		return
+	}
+	// Pc selects the target buffer: c(lipboard), p(rimary), q, s(elect), or cut
+	// buffers 0-7. Empty means "s0" per spec but every app in practice means the
+	// clipboard. Mirror only the ones the user would call "the clipboard" —
+	// primary-only and cut-buffer writes are scratch space, not a copy.
+	if len(pc) > 0 && !bytes.ContainsAny(pc, "cs") {
+		return
+	}
+
+	// Tolerate the unpadded and line-wrapped base64 some apps emit.
+	b64 := strings.Map(func(r rune) rune {
+		if r == '\r' || r == '\n' {
+			return -1
+		}
+		return r
+	}, string(pd))
+	text, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		if text, err = base64.RawStdEncoding.DecodeString(b64); err != nil {
+			return
+		}
+	}
+	if len(text) == 0 {
+		return
+	}
+	fn(string(text))
+}
+
 func (t *Terminal) stripOSC667(data []byte) []byte {
 	// Prepend any buffered data from a previous incomplete sequence.
 	if len(t.osc667Buf) > 0 {
@@ -716,6 +848,14 @@ func (t *Terminal) SetOnOutput(fn func()) {
 	t.mu.Unlock()
 }
 
+// SetOnClipboard sets a callback that fires when the child app copies text via
+// OSC 52. Called from emuWriteLoop — the callback must not block.
+func (t *Terminal) SetOnClipboard(fn func(text string)) {
+	t.mu.Lock()
+	t.onClipboard = fn
+	t.mu.Unlock()
+}
+
 // SetOnBell sets a callback that fires when the child app rings the bell (BEL).
 // Used to show bell indicators on unfocused/minimized windows.
 func (t *Terminal) SetOnBell(fn func()) {
@@ -833,6 +973,7 @@ func (t *Terminal) safeEmuWrite(data []byte) {
 
 	data = t.extractOSCTitles(data)
 	data = t.stripOSC667(data)
+	data = t.extractOSC52(data)
 	if len(data) == 0 {
 		return
 	}
@@ -1484,6 +1625,7 @@ func (t *Terminal) Close() error {
 	t.onKittyGraphics = nil
 	t.onImageGraphics = nil
 	t.onScreenClear = nil
+	t.onClipboard = nil
 	if t.syncFireTimer != nil {
 		t.syncFireTimer.Stop()
 		t.syncFireTimer = nil

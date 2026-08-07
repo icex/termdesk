@@ -111,8 +111,8 @@ func (p *PtySession) Fd() uintptr {
 // so appending overrides to os.Environ() doesn't actually override.
 // Within overrides, later values for the same key win (last-wins semantics).
 func buildChildEnv(overrides ...string) []string {
-	// Deduplicate overrides: for each key, keep only the LAST value.
-	// This ensures "TERM=xterm-kitty" after "TERM=xterm-256color" wins.
+	// Deduplicate overrides: for each key, keep only the LAST value, so a
+	// caller's extraEnv can override one of the defaults prepended above.
 	lastIdx := make(map[string]int, len(overrides))
 	for i, kv := range overrides {
 		if j := strings.IndexByte(kv, '='); j >= 0 {

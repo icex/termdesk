@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"image/color"
 	"io"
@@ -3372,5 +3373,193 @@ func TestPlaceOneAllZeroFallbacks(t *testing.T) {
 	// Should have r=1 (fallback for all zeros)
 	if !strings.Contains(out, ",r=1") {
 		t.Errorf("expected r=1 fallback, got: %s", out)
+	}
+}
+
+// A child PTY must report a terminfo name that exists on any reasonable
+// machine — $TERM is forwarded verbatim by ssh, so anything exotic here
+// breaks ncurses apps on the far end.
+func TestChildTermIsPortable(t *testing.T) {
+	term, err := New("/bin/sh", []string{"-c", "echo TERM=$TERM"}, 80, 24, 0, 0, "")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer term.Close()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- term.ReadPtyLoop() }()
+	select {
+	case <-errCh:
+	case <-time.After(2 * time.Second):
+	}
+
+	output := term.CaptureBufferText()
+	if !containsSubstring(output, "TERM=xterm-256color") {
+		t.Errorf("expected TERM=xterm-256color in child env, got:\n%s", output)
+	}
+}
+
+func TestExtractOSC52(t *testing.T) {
+	newTerm := func(t *testing.T) (*Terminal, *[]string) {
+		t.Helper()
+		term, err := New("/bin/echo", nil, 80, 24, 0, 0, "")
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		t.Cleanup(func() { term.Close() })
+		var got []string
+		term.SetOnClipboard(func(text string) { got = append(got, text) })
+		return term, &got
+	}
+
+	t.Run("BEL terminated set", func(t *testing.T) {
+		term, got := newTerm(t)
+		// base64("hello world")
+		out := term.extractOSC52([]byte("\x1b]52;c;aGVsbG8gd29ybGQ=\x07after"))
+		if len(*got) != 1 || (*got)[0] != "hello world" {
+			t.Errorf("clipboard = %q, want [\"hello world\"]", *got)
+		}
+		if string(out) != "after" {
+			t.Errorf("output = %q, want %q", string(out), "after")
+		}
+	})
+
+	t.Run("ST terminated set", func(t *testing.T) {
+		term, got := newTerm(t)
+		out := term.extractOSC52([]byte("pre\x1b]52;c;aGVsbG8gd29ybGQ=\x1b\\post"))
+		if len(*got) != 1 || (*got)[0] != "hello world" {
+			t.Errorf("clipboard = %q, want [\"hello world\"]", *got)
+		}
+		if string(out) != "prepost" {
+			t.Errorf("output = %q, want %q", string(out), "prepost")
+		}
+	})
+
+	t.Run("split across chunks", func(t *testing.T) {
+		term, got := newTerm(t)
+		if out := term.extractOSC52([]byte("\x1b]52;c;aGVsbG8g")); len(out) != 0 {
+			t.Errorf("partial output = %q, want empty", string(out))
+		}
+		if len(*got) != 0 {
+			t.Errorf("fired early: %q", *got)
+		}
+		out := term.extractOSC52([]byte("d29ybGQ=\x07tail"))
+		if len(*got) != 1 || (*got)[0] != "hello world" {
+			t.Errorf("clipboard = %q, want [\"hello world\"]", *got)
+		}
+		if string(out) != "tail" {
+			t.Errorf("output = %q, want %q", string(out), "tail")
+		}
+	})
+
+	t.Run("empty Pc defaults to clipboard", func(t *testing.T) {
+		term, got := newTerm(t)
+		term.extractOSC52([]byte("\x1b]52;;aGVsbG8gd29ybGQ=\x07"))
+		if len(*got) != 1 || (*got)[0] != "hello world" {
+			t.Errorf("clipboard = %q, want [\"hello world\"]", *got)
+		}
+	})
+
+	t.Run("query is stripped without firing", func(t *testing.T) {
+		term, got := newTerm(t)
+		out := term.extractOSC52([]byte("\x1b]52;c;?\x07rest"))
+		if len(*got) != 0 {
+			t.Errorf("query fired callback: %q", *got)
+		}
+		if string(out) != "rest" {
+			t.Errorf("output = %q, want %q", string(out), "rest")
+		}
+	})
+
+	t.Run("invalid base64 is stripped without firing", func(t *testing.T) {
+		term, got := newTerm(t)
+		out := term.extractOSC52([]byte("\x1b]52;c;!!!not base64!!!\x07rest"))
+		if len(*got) != 0 {
+			t.Errorf("invalid payload fired callback: %q", *got)
+		}
+		if string(out) != "rest" {
+			t.Errorf("output = %q, want %q", string(out), "rest")
+		}
+	})
+
+	t.Run("other OSC passes through", func(t *testing.T) {
+		term, got := newTerm(t)
+		data := []byte("\x1b]8;;http://example.com\x07click\x1b]520;x\x07")
+		out := term.extractOSC52(data)
+		if string(out) != string(data) {
+			t.Errorf("output = %q, want unchanged %q", string(out), string(data))
+		}
+		if len(*got) != 0 {
+			t.Errorf("unexpected callback: %q", *got)
+		}
+	})
+}
+
+// The extraction has to sit in the real write path, not just be a function that
+// happens to work — an OSC 52 that reaches the emulator is dropped silently.
+func TestSafeEmuWriteForwardsOSC52(t *testing.T) {
+	term, err := New("/bin/echo", nil, 80, 24, 0, 0, "")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer term.Close()
+
+	var got string
+	term.SetOnClipboard(func(text string) { got = text })
+
+	term.safeEmuWrite([]byte("\x1b]52;c;aGVsbG8gd29ybGQ=\x07visible"))
+
+	if got != "hello world" {
+		t.Errorf("clipboard = %q, want %q", got, "hello world")
+	}
+	var row strings.Builder
+	for col := 0; col < 7; col++ {
+		if cell := term.CellAt(col, 0); cell != nil {
+			row.WriteString(cell.Content)
+		}
+	}
+	if row.String() != "visible" {
+		t.Errorf("screen row = %q, want %q", row.String(), "visible")
+	}
+}
+
+// The unit tests drive extractOSC52 directly; this one runs a real shell on a
+// real PTY so the whole read path is exercised — which is the actual shape of
+// the bug (Claude Code over ssh writing OSC 52 to its tty).
+func TestRealPtyOSC52ReachesCallback(t *testing.T) {
+	want := "termdesk osc52 real pty"
+	b64 := base64.StdEncoding.EncodeToString([]byte(want))
+
+	term, err := New("/bin/sh", []string{"-c",
+		"printf '\\033]52;c;" + b64 + "\\007'; sleep 2"}, 80, 24, 0, 0, "")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer term.Close()
+
+	got := make(chan string, 1)
+	term.SetOnClipboard(func(text string) {
+		select {
+		case got <- text:
+		default:
+		}
+	})
+
+	go func() {
+		buf := make([]byte, 32*1024)
+		for {
+			if _, err := term.ReadOnce(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	select {
+	case text := <-got:
+		if text != want {
+			t.Errorf("clipboard = %q, want %q", text, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("onClipboard never fired for a real shell's OSC 52")
 	}
 }

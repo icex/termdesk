@@ -372,15 +372,7 @@ func (m *Model) restoreWorkspace(state *workspace.WorkspaceState, projectDir str
 					pWorkDir = ws.WorkDir
 				}
 
-				var graphicsEnv []string
-				if m.kittyPass != nil && m.kittyPass.IsEnabled() {
-					if terminal.HasKittyTerminfo() {
-						graphicsEnv = append(graphicsEnv, "TERM=xterm-kitty")
-					}
-					if tp := terminal.HostTermProgram(); tp != "" {
-						graphicsEnv = append(graphicsEnv, "TERM_PROGRAM="+tp)
-					}
-				}
+				graphicsEnv := m.graphicsEnv(pr.TermID)
 
 				var paneTerm *terminal.Terminal
 				var pErr error

@@ -97,7 +97,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				CustomWidgetResultMsg, BuiltinWidgetDataMsg,
 				tea.MouseMotionMsg, tea.MouseWheelMsg,
 				tea.MouseClickMsg, tea.MouseReleaseMsg,
-				BellMsg,
+				BellMsg, TerminalClipboardMsg,
 				WorkspaceAutoSaveMsg, WorkspaceDiscoveryMsg,
 				ResizeSettleTickMsg:
 				// No-op events: no window position/size changes and no
@@ -351,6 +351,16 @@ func (m Model) handleUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, tea.Batch(cmds...)
+
+	case TerminalClipboardMsg:
+		// A child app copied via OSC 52. Mirror it into the clipboard ring and
+		// relay it to the host terminal so the copy lands in the system
+		// clipboard — the emulator would otherwise drop the sequence.
+		if msg.Text == "" {
+			return m, nil
+		}
+		m.clipboard.Copy(msg.Text)
+		return m, osc52SetCmd(msg.Text)
 
 	case PtyOutputMsg:
 		// PTY produced output — just re-render (goroutine handles reads)

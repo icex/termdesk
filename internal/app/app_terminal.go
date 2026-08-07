@@ -176,6 +176,38 @@ func (m *Model) nextTerminalNumber() int {
 	}
 }
 
+// graphicsEnv returns the env hints that let child processes detect image
+// protocol support. Child apps talk to our VT emulator, not the host terminal,
+// so they need hints to know graphics are available at all.
+//
+// It deliberately does NOT set TERM. $TERM names a terminfo entry and ssh
+// forwards it verbatim, so pointing it at a host-specific name (xterm-kitty)
+// breaks every ncurses app on remotes that lack that entry — htop on a fresh
+// server just prints "Error opening terminal". The emulator is an xterm
+// anyway, so the xterm-256color set by NewPtySession is both portable and
+// honest; graphics-aware tools detect support by querying the terminal or by
+// reading TERM_PROGRAM below.
+func (m Model) graphicsEnv(termID string) []string {
+	var env []string
+	if m.kittyPass != nil && m.kittyPass.IsEnabled() {
+		// Propagate the real host identity so tools like kitten/chafa see the
+		// actual terminal (e.g. "ghostty") and pick their optimal code path.
+		// Spoofing another terminal here breaks chafa's auto-size detection
+		// (it shrinks images to 1 cell when it sees an identity it has
+		// special rules for).
+		if tp := terminal.HostTermProgram(); tp != "" {
+			env = append(env, "TERM_PROGRAM="+tp)
+		}
+	}
+	// iTerm2 inline images: imgcat checks ITERM_SESSION_ID (primary) and
+	// LC_TERMINAL (secondary). Safe because BT v2 checks TERM_PROGRAM (which
+	// the session server strips), not these.
+	if m.imagePass != nil && m.imagePass.Iterm2Enabled() {
+		env = append(env, "LC_TERMINAL=iTerm2", "ITERM_SESSION_ID=termdesk-"+termID)
+	}
+	return env
+}
+
 // createTerminalWindow is the single entry point for opening a new terminal window.
 // It handles cascaded (default), maximized, and fixed-size placement.
 func (m *Model) createTerminalWindow(opts TerminalWindowOpts) tea.Cmd {
@@ -275,39 +307,8 @@ func (m *Model) createTerminalWindow(opts TerminalWindowOpts) tea.Cmd {
 		contentH = 1
 	}
 
-	// When Kitty graphics passthrough is enabled, set env vars so child apps
-	// (kitten icat, etc.) detect graphics support. Child apps talk to our VT
-	// emulator which identifies as xterm — they need env hints to know graphics
-	// are available. TERM=xterm-kitty is the most reliable signal (kitten checks
-	// for "kitty" in TERM). TERM_PROGRAM provides secondary identification.
-	var graphicsEnv []string
-	if m.kittyPass != nil && m.kittyPass.IsEnabled() {
-		if terminal.HasKittyTerminfo() {
-			graphicsEnv = append(graphicsEnv, "TERM=xterm-kitty")
-		}
-		if tp := terminal.HostTermProgram(); tp != "" {
-			// Propagate the real host identity so tools like kitten/chafa
-			// see the actual terminal (e.g. "ghostty") and pick their
-			// optimal code path. Spoofing another terminal here breaks
-			// chafa's auto-size detection (it shrinks images to 1 cell
-			// when it sees an identity it has special rules for).
-			graphicsEnv = append(graphicsEnv, "TERM_PROGRAM="+tp)
-		}
-		// If HostTermProgram returned empty we simply don't set TERM_PROGRAM.
-		// TERM=xterm-kitty above is already a strong signal for kitten to
-		// enable graphics; kitten's primary check is `kitty` in $TERM, not
-		// TERM_PROGRAM, so an unknown host identity is preferable to a lie.
-		kittyDbg("createTerminalWindow: graphics enabled, env=%v", graphicsEnv)
-	} else {
-		kittyDbg("createTerminalWindow: graphics NOT enabled (pass=%v)", m.kittyPass != nil)
-	}
-	// iTerm2 inline images: set env vars so imgcat detects support.
-	// imgcat checks ITERM_SESSION_ID (primary) and LC_TERMINAL (secondary).
-	// Safe because BT v2 checks TERM_PROGRAM (which we strip), not these.
-	if m.imagePass != nil && m.imagePass.Iterm2Enabled() {
-		graphicsEnv = append(graphicsEnv, "LC_TERMINAL=iTerm2")
-		graphicsEnv = append(graphicsEnv, "ITERM_SESSION_ID=termdesk-"+id)
-	}
+	graphicsEnv := m.graphicsEnv(id)
+	kittyDbg("createTerminalWindow: graphics env=%v (pass=%v)", graphicsEnv, m.kittyPass != nil)
 
 	var term *terminal.Terminal
 	var err error
@@ -480,6 +481,15 @@ func (m *Model) spawnPTYReader(windowID string, term *terminal.Terminal) {
 	term.SetOnBell(func() {
 		go safeSend(p, BellMsg{WindowID: windowID})
 	})
+
+	// Wire OSC 52 clipboard passthrough. Skipped for the wallpaper terminal —
+	// it runs unattended behind every window and has no business overwriting
+	// what the user copied.
+	if windowID != wallpaperTermID {
+		term.SetOnClipboard(func(text string) {
+			go safeSend(p, TerminalClipboardMsg{WindowID: windowID, Text: text})
+		})
+	}
 
 	// Wire Kitty graphics passthrough — intercepts APC sequences from child PTY
 	// and forwards them to the real terminal via the shared KittyPassthrough.
@@ -935,15 +945,7 @@ func (m Model) restartExitedWindow(windowID string) (tea.Model, tea.Cmd) {
 		contentH = 1
 	}
 
-	var graphicsEnv []string
-	if m.kittyPass != nil && m.kittyPass.IsEnabled() {
-		if terminal.HasKittyTerminfo() {
-			graphicsEnv = append(graphicsEnv, "TERM=xterm-kitty")
-		}
-		if tp := terminal.HostTermProgram(); tp != "" {
-			graphicsEnv = append(graphicsEnv, "TERM_PROGRAM="+tp)
-		}
-	}
+	graphicsEnv := m.graphicsEnv(windowID)
 
 	var term *terminal.Terminal
 	var err error

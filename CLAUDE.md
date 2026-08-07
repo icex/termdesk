@@ -218,6 +218,13 @@ Debug log: `/tmp/termdesk-image.log`.
 - Minimum window size is 40×10, enforced in `window/drag.go` `ApplyDrag`.
 - Minimize animation: set `w.Minimized = true` *before* starting the animation
   so the dock entry appears immediately.
+- Never override `TERM` for child PTYs. `ssh` forwards `$TERM` verbatim, so a
+  host-specific terminfo name (`xterm-kitty`) breaks every ncurses app on
+  remotes that lack the entry — `htop` over ssh dies with "Error opening
+  terminal: xterm-kitty". Children get `xterm-256color` from `NewPtySession`,
+  which is what the emulator actually is. Graphics hints belong in
+  `TERM_PROGRAM` / `LC_TERMINAL` / `ITERM_SESSION_ID` — build them in one
+  place, `Model.graphicsEnv()` in `app_terminal.go`.
 - Sixel cursor advance uses `\n`, not CUD — see image passthrough section.
 - Don't emit DECSC/DECRC in `tea.Raw()` output; BT maintains its own cursor
   state and they fight.
@@ -228,6 +235,13 @@ Debug log: `/tmp/termdesk-image.log`.
   (e.g. `✳` U+2733 = `\xe2\x9c\xb3`). `extractOSCTitles()` in `terminal.go`
   intercepts OSC 0/2 before the emulator sees them and strips the sequence
   cleanly.
+- The `vt` emulator registers OSC handlers for 0/1/2/7/8/10/11/12/110/111/112
+  and nothing else — an OSC 52 clipboard write from a child app is parsed and
+  dropped. `extractOSC52()` in `terminal.go` intercepts it before the emulator,
+  decodes the base64, and the app relays it to the host via `TerminalClipboardMsg`
+  → `osc52SetCmd`. Without this, copying from any app that has no local
+  clipboard access (Claude Code over ssh, tmux, nvim with `clipboard=osc52`)
+  silently does nothing. The wallpaper terminal is deliberately excluded.
 
 ## Config
 

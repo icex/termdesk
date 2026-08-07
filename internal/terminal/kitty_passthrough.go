@@ -30,7 +30,7 @@ type KittyPassthrough struct {
 	mu            sync.Mutex
 	enabled       bool
 	placements    map[string]map[uint32]*KittyPlacement // windowID → hostID → placement
-	imageIDMap    map[string]map[uint32]uint32           // windowID → guestID → hostID
+	imageIDMap    map[string]map[uint32]uint32          // windowID → guestID → hostID
 	nextHostID    uint32
 	pendingOutput []byte
 	pendingDirect map[string]*pendingDirectTransmit // windowID → accumulating chunks
@@ -273,25 +273,6 @@ func HostTermProgram() string {
 	return os.Getenv("TERM_PROGRAM")
 }
 
-// HasKittyTerminfo checks if the xterm-kitty terminfo is installed on the system.
-// When available, child processes can use TERM=xterm-kitty for full Kitty
-// protocol detection by graphics-aware tools.
-func HasKittyTerminfo() bool {
-	home := os.Getenv("HOME")
-	paths := []string{
-		home + "/.terminfo/x/xterm-kitty",
-		"/usr/share/terminfo/x/xterm-kitty",
-		"/usr/lib/terminfo/x/xterm-kitty",
-		"/etc/terminfo/x/xterm-kitty",
-	}
-	for _, p := range paths {
-		if _, err := os.Stat(p); err == nil {
-			return true
-		}
-	}
-	return false
-}
-
 // IsEnabled returns whether Kitty graphics passthrough is active.
 func (kp *KittyPassthrough) IsEnabled() bool {
 	kp.mu.Lock()
@@ -487,7 +468,7 @@ func (kp *KittyPassthrough) forwardDirectTransmit(
 			XOffset: cmd.XOffset, YOffset: cmd.YOffset,
 			ZIndex: cmd.ZIndex, Virtual: cmd.Virtual, CursorMove: cmd.CursorMove,
 			AndPlace: andPlace,
-			WindowX: windowX, WindowY: windowY,
+			WindowX:  windowX, WindowY: windowY,
 			WindowWidth: windowWidth, WindowHeight: windowHeight,
 			ContentOffX: contentOffX, ContentOffY: contentOffY,
 			CursorX: cursorX, CursorY: cursorY,
@@ -549,7 +530,7 @@ func (kp *KittyPassthrough) forwardDirectTransmit(
 	// the window borders, covering dock/menubar/other windows.
 	// Use actual content offsets instead of hardcoded -2 to handle varying
 	// title bar heights across themes.
-	contentWidth := windowWidth - contentOffX - 1  // left offset + right border
+	contentWidth := windowWidth - contentOffX - 1   // left offset + right border
 	contentHeight := windowHeight - contentOffY - 1 // top offset + bottom border
 	displayCols := imgCols
 	displayRows := imgRows
@@ -648,7 +629,7 @@ func (kp *KittyPassthrough) forwardDirectTransmit(
 			SourceWidth: pending.SourceWidth, SourceHeight: pending.SourceHeight,
 			XOffset: pending.XOffset, YOffset: pending.YOffset,
 			ZIndex: pending.ZIndex, Virtual: pending.Virtual,
-			IsAltScreen: pending.IsAltScreen,
+			IsAltScreen:     pending.IsAltScreen,
 			Hidden:          true, // deferred — refresh will show it
 			ReadyScrollback: readyScrollback,
 		}

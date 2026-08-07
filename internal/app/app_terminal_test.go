@@ -642,3 +642,34 @@ func TestPtyClosedUsesSelectedTileAllLayout(t *testing.T) {
 		}
 	}
 }
+
+// --- child PTY environment ---
+
+// TERM must never be overridden for child PTYs. ssh forwards $TERM verbatim,
+// so naming a terminfo entry that only exists on this machine (xterm-kitty)
+// breaks every ncurses app on remotes that lack it — htop on a fresh server
+// dies with "Error opening terminal: xterm-kitty".
+func TestGraphicsEnvNeverOverridesTERM(t *testing.T) {
+	t.Setenv("TERMDESK_GRAPHICS", "kitty")
+	m := New()
+	if m.kittyPass == nil || !m.kittyPass.IsEnabled() {
+		t.Fatal("kitty passthrough should be enabled with TERMDESK_GRAPHICS=kitty")
+	}
+	for _, kv := range m.graphicsEnv("term-1") {
+		if strings.HasPrefix(kv, "TERM=") {
+			t.Errorf("graphicsEnv leaked a TERM override: %q", kv)
+		}
+	}
+}
+
+// Dropping the TERM override must not cost us the env hints graphics-aware
+// tools actually key off.
+func TestGraphicsEnvKeepsHostIdentity(t *testing.T) {
+	t.Setenv("TERMDESK_GRAPHICS", "kitty")
+	t.Setenv("TERMDESK_HOST_TERM_PROGRAM", "ghostty")
+	m := New()
+	env := strings.Join(m.graphicsEnv("term-1"), " ")
+	if !strings.Contains(env, "TERM_PROGRAM=ghostty") {
+		t.Errorf("expected host TERM_PROGRAM to be propagated, got %q", env)
+	}
+}

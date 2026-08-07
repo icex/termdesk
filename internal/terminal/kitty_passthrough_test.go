@@ -152,8 +152,8 @@ func TestPlaceOneWithClipTop(t *testing.T) {
 		HostX:       10, HostY: 5,
 		Cols: 20, Rows: 10, DisplayRows: 10,
 		MaxShowable: 7, MaxShowableCols: 20,
-		ClipTop:     3,
-		PixelWidth:  200, PixelHeight: 200,
+		ClipTop:    3,
+		PixelWidth: 200, PixelHeight: 200,
 	}
 	kp.placeOne(p)
 	out := string(kp.pendingOutput)
@@ -848,12 +848,6 @@ func TestHostTermProgram(t *testing.T) {
 	if got := HostTermProgram(); got != "" {
 		t.Errorf("expected empty, got %q", got)
 	}
-}
-
-func TestHasKittyTerminfo(t *testing.T) {
-	// This test just verifies the function runs without panicking
-	// and returns a bool. We can't control system terminfo paths.
-	_ = HasKittyTerminfo()
 }
 
 func TestForwardCommandDisabled(t *testing.T) {

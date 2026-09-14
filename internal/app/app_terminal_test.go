@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -420,7 +421,7 @@ func TestWindowIconKnownCommands(t *testing.T) {
 		{"htop", true},
 		{"python3", true},
 		{"nano", true},
-		{"/usr/bin/nvim", true}, // full path should also match
+		{"/usr/bin/nvim", true},  // full path should also match
 		{"unknown-binary", true}, // returns default terminal icon
 	}
 	for _, tc := range tests {
@@ -671,5 +672,125 @@ func TestGraphicsEnvKeepsHostIdentity(t *testing.T) {
 	env := strings.Join(m.graphicsEnv("term-1"), " ")
 	if !strings.Contains(env, "TERM_PROGRAM=ghostty") {
 		t.Errorf("expected host TERM_PROGRAM to be propagated, got %q", env)
+	}
+}
+
+// openFocusTestWindows opens n terminal windows running /bin/cat, laid out
+// side by side so each title bar is clickable, and returns their IDs in
+// creation order. The last one is focused.
+func openFocusTestWindows(t *testing.T, m *Model, n int) []string {
+	t.Helper()
+	terms := m.terminals
+	t.Cleanup(func() {
+		for _, term := range terms {
+			term.Close()
+		}
+	})
+	var ids []string
+	for i := 0; i < n; i++ {
+		m.openTerminalWindowWith("/bin/cat", nil, fmt.Sprintf("Win %d", i+1), "")
+		fw := m.wm.FocusedWindow()
+		if fw == nil || m.terminals[fw.ID] == nil {
+			t.Fatalf("window %d was not created with a terminal", i+1)
+		}
+		fw.Rect = geometry.Rect{X: i * 60, Y: 1, Width: 60, Height: 20}
+		ids = append(ids, fw.ID)
+	}
+	return ids
+}
+
+func TestFocusChangeInputMode(t *testing.T) {
+	press := func(m Model, k tea.Key) Model {
+		updated, _ := m.Update(tea.KeyPressMsg(k))
+		return updated.(Model)
+	}
+	tests := []struct {
+		name  string
+		focus func(m Model, ids []string) Model
+	}{
+		{"number key", func(m Model, ids []string) Model {
+			for i, w := range m.wm.Windows() {
+				if w.ID == ids[0] {
+					return press(m, tea.Key{Code: rune('1' + i), Text: string(rune('1' + i))})
+				}
+			}
+			return m
+		}},
+		{"quick next window", func(m Model, ids []string) Model {
+			return press(m, tea.Key{Code: ']', Mod: tea.ModAlt})
+		}},
+		{"expose selection", func(m Model, ids []string) Model {
+			m.enterExpose()
+			m = press(m, tea.Key{Code: tea.KeyTab})
+			return completeAnimations(press(m, tea.Key{Code: tea.KeyEnter}))
+		}},
+		{"title bar click", func(m Model, ids []string) Model {
+			w := m.wm.WindowByID(ids[0])
+			updated, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: w.Rect.X + 3, Y: w.Rect.Y, Button: tea.MouseLeft}))
+			m = updated.(Model)
+			updated, _ = m.Update(tea.MouseReleaseMsg(tea.Mouse{X: w.Rect.X + 3, Y: w.Rect.Y, Button: tea.MouseLeft}))
+			return updated.(Model)
+		}},
+		{"minimize focuses next window", func(m Model, ids []string) Model {
+			updated, _ := m.executeAction("minimize", tea.KeyPressMsg{}, "")
+			return completeAnimations(updated.(Model))
+		}},
+		{"restore minimized window", func(m Model, ids []string) Model {
+			m.minimizeWindow(m.wm.WindowByID(ids[0]))
+			m = completeAnimations(m)
+			m.inputMode = ModeNormal
+			m.restoreMinimizedWindow(m.wm.WindowByID(ids[0]))
+			return completeAnimations(m)
+		}},
+		{"close focuses next window", func(m Model, ids []string) Model {
+			m.confirmClose = &ConfirmDialog{WindowID: ids[1], Title: "Close?"}
+			updated, _ := m.confirmAccept()
+			return completeAnimations(updated.(Model))
+		}},
+	}
+	for _, tt := range tests {
+		for _, enabled := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/default_terminal_mode=%v", tt.name, enabled), func(t *testing.T) {
+				m := setupReadyModel()
+				m.defaultTerminalMode = enabled
+				ids := openFocusTestWindows(t, &m, 2)
+				m.inputMode = ModeNormal
+				before := m.wm.FocusedWindow().ID
+
+				m = tt.focus(m, ids)
+
+				fw := m.wm.FocusedWindow()
+				if fw == nil || fw.ID == before || fw.Minimized {
+					t.Fatalf("focus did not move to another visible window (before=%s, now=%v)", before, fw)
+				}
+				want := ModeNormal
+				if enabled {
+					want = ModeTerminal
+				}
+				if m.inputMode != want {
+					t.Errorf("inputMode = %s, want %s", m.inputMode, want)
+				}
+			})
+		}
+	}
+}
+
+func TestTabCycleKeepsNormalMode(t *testing.T) {
+	// Tab steps through windows → dock → menu bar in Normal mode. Switching
+	// to Terminal mode on each step would send the next Tab to the shell.
+	m := setupReadyModel()
+	m.defaultTerminalMode = true
+	openFocusTestWindows(t, &m, 2)
+	m.inputMode = ModeNormal
+	before := m.wm.FocusedWindow().ID
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = updated.(Model)
+
+	if m.wm.FocusedWindow().ID == before {
+		t.Fatal("tab did not move focus")
+	}
+	if m.inputMode != ModeNormal {
+		t.Errorf("inputMode = %s, want NORMAL", m.inputMode)
 	}
 }

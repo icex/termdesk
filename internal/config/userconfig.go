@@ -150,9 +150,9 @@ type UserConfig struct {
 	MinimizeToDock        bool                    `toml:"minimize_to_dock"`
 	HideDockWhenMaximized bool                    `toml:"hide_dock_when_maximized"`
 	TourCompleted         bool                    `toml:"tour_completed"`
-	DefaultTerminalMode   bool                    `toml:"default_terminal_mode"`   // start in Terminal mode on window focus
-	HideDockApps          bool                    `toml:"hide_dock_apps"`          // hide common app shortcuts in dock
-	DockPill              bool                    `toml:"dock_pill"`               // render dock as a centered rounded pill with transparent sides
+	DefaultTerminalMode   bool                    `toml:"default_terminal_mode"` // start in Terminal mode on window focus
+	HideDockApps          bool                    `toml:"hide_dock_apps"`        // hide common app shortcuts in dock
+	DockPill              bool                    `toml:"dock_pill"`             // render dock as a centered rounded pill with transparent sides
 	FocusFollowsMouse     bool                    `toml:"focus_follows_mouse"`   // auto-focus window under mouse cursor
 	ShowResizeIndicator   bool                    `toml:"show_resize_indicator"` // show resize dimensions overlay
 	ShowKeys              bool                    `toml:"show_keys"`
@@ -162,17 +162,17 @@ type UserConfig struct {
 	WorkspaceAutoSaveMin  int                     `toml:"workspace_auto_save_min"` // auto-save interval in minutes
 	RecentApps            []string                `toml:"recent_apps"`
 	Favorites             []string                `toml:"favorites"`
-	RecentWorkspaces      []WorkspaceHistoryEntry `toml:"recent_workspaces"` // workspace load history
-	LogLevel              string                  `toml:"log_level"`         // "off", "error", "warn", "info", "debug"
+	RecentWorkspaces      []WorkspaceHistoryEntry `toml:"recent_workspaces"`    // workspace load history
+	LogLevel              string                  `toml:"log_level"`            // "off", "error", "warn", "info", "debug"
 	QuakeHeightPercent    int                     `toml:"quake_height_percent"` // quake terminal height as % of screen (default 40)
-	EnabledWidgets        []string                `toml:"enabled_widgets"`   // ordered list of enabled widget names (nil = all defaults)
-	CustomWidgets         []CustomWidgetDef       `toml:"custom_widgets"`    // user-defined shell widgets
-	WallpaperMode         string                  `toml:"wallpaper_mode"`          // "theme", "color", "pattern", "program"
-	WallpaperColor        string                  `toml:"wallpaper_color"`         // hex "#RRGGBB" for solid color mode
-	WallpaperPattern      string                  `toml:"wallpaper_pattern"`       // pattern character(s) for pattern mode
-	WallpaperPatternFg    string                  `toml:"wallpaper_pattern_fg"`    // pattern foreground hex
-	WallpaperPatternBg    string                  `toml:"wallpaper_pattern_bg"`    // pattern background hex
-	WallpaperProgram      string                  `toml:"wallpaper_program"`       // command for program mode (e.g. "cmatrix -s")
+	EnabledWidgets        []string                `toml:"enabled_widgets"`      // ordered list of enabled widget names (nil = all defaults)
+	CustomWidgets         []CustomWidgetDef       `toml:"custom_widgets"`       // user-defined shell widgets
+	WallpaperMode         string                  `toml:"wallpaper_mode"`       // "theme", "color", "pattern", "program"
+	WallpaperColor        string                  `toml:"wallpaper_color"`      // hex "#RRGGBB" for solid color mode
+	WallpaperPattern      string                  `toml:"wallpaper_pattern"`    // pattern character(s) for pattern mode
+	WallpaperPatternFg    string                  `toml:"wallpaper_pattern_fg"` // pattern foreground hex
+	WallpaperPatternBg    string                  `toml:"wallpaper_pattern_bg"` // pattern background hex
+	WallpaperProgram      string                  `toml:"wallpaper_program"`    // command for program mode (e.g. "cmatrix -s")
 	Keys                  KeyBindings
 }
 
@@ -195,9 +195,10 @@ func DefaultUserConfig() UserConfig {
 		AnimationSpeed:       "fast",
 		AnimationStyle:       "smooth",
 		MinimizeToDock:       true,
+		DefaultTerminalMode:  true,
 		TilingLayout:         "columns",
 		WorkspaceAutoSave:    true,
-		WorkspaceAutoSaveMin:  1, // 1 minute default
+		WorkspaceAutoSaveMin: 1, // 1 minute default
 		QuakeHeightPercent:   40,
 		Keys:                 DefaultKeyBindings(),
 	}
@@ -655,6 +656,8 @@ func SaveUserConfig(cfg UserConfig) error {
 	}
 	if cfg.DefaultTerminalMode {
 		sb.WriteString("default_terminal_mode = true\n")
+	} else {
+		sb.WriteString("default_terminal_mode = false\n")
 	}
 	if cfg.HideDockApps {
 		sb.WriteString("hide_dock_apps = true\n")

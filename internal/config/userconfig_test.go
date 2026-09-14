@@ -1241,3 +1241,23 @@ func TestParseConfigLegacyShowLaunchedInDock(t *testing.T) {
 		t.Error("show_launched_in_dock should set MinimizeToDock to true")
 	}
 }
+
+func TestDefaultTerminalModeDefaultsOnAndRoundTripsOff(t *testing.T) {
+	setTestConfigPath(t)
+
+	if !DefaultUserConfig().DefaultTerminalMode {
+		t.Fatal("DefaultTerminalMode should default to true")
+	}
+	if !LoadUserConfig().DefaultTerminalMode {
+		t.Error("missing config file should load DefaultTerminalMode = true")
+	}
+
+	cfg := DefaultUserConfig()
+	cfg.DefaultTerminalMode = false
+	if err := SaveUserConfig(cfg); err != nil {
+		t.Fatalf("SaveUserConfig: %v", err)
+	}
+	if LoadUserConfig().DefaultTerminalMode {
+		t.Error("explicitly disabled DefaultTerminalMode should survive save/load")
+	}
+}

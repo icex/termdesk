@@ -200,6 +200,7 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 			m.selectExposeWindow(mouse.X, mouse.Y)
 			m.exitExpose()
 			m.inputMode = ModeNormal
+			m.syncFocusInputMode()
 		}
 		return m, tickAnimation()
 	}
@@ -416,6 +417,7 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	}
 
 	// Focus the clicked window
+	wasFocused := w.Focused
 	m.wm.FocusWindow(w.ID)
 
 	// If we clicked back on the copy window while snapshot is active, restore copy mode.
@@ -426,6 +428,9 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		if sameWindow {
 			m.inputMode = ModeCopy
 		}
+	}
+	if !wasFocused {
+		m.syncFocusInputMode()
 	}
 
 	// Determine what was clicked

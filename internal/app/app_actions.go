@@ -202,9 +202,8 @@ func (m Model) executeAction(action string, msg tea.KeyPressMsg, key string) (te
 
 	case "minimize":
 		if fw := m.wm.FocusedWindow(); fw != nil {
-			m.minimizeWindow(fw)
-		}
-		if wasTerminal {
+			m.minimizeWindow(fw) // sets the mode for the next focused window
+		} else if wasTerminal {
 			m.inputMode = ModeNormal
 		}
 		return m, tickAnimation()
@@ -595,12 +594,7 @@ func (m Model) confirmAccept() (tea.Model, tea.Cmd) {
 	m.closeTerminal(wid)
 	m.wm.RemoveWindow(wid)
 	m.updateDockReserved()
-	// Prevent terminal mode on minimized/no windows after removal
-	if m.inputMode == ModeTerminal {
-		if fw := m.wm.FocusedWindow(); fw == nil || fw.Minimized {
-			m.inputMode = ModeNormal
-		}
-	}
+	m.syncFocusInputMode()
 	if m.tilingMode {
 		m.applyTilingLayout()
 		return m, tickAnimation()

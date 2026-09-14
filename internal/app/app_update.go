@@ -873,12 +873,7 @@ func (m Model) handleUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if removed {
 			m.wm.RemoveWindow(msg.WindowID)
 			m.updateDockReserved()
-			// Prevent terminal mode on minimized/no windows after removal
-			if m.inputMode == ModeTerminal {
-				if fw := m.wm.FocusedWindow(); fw == nil || fw.Minimized {
-					m.inputMode = ModeNormal
-				}
-			}
+			m.syncFocusInputMode()
 		}
 		if removed && m.tilingMode {
 			m.applyTilingLayout()

@@ -415,6 +415,21 @@ func (m *Model) focusedTerminal() (*window.Window, *terminal.Terminal) {
 	return fw, term
 }
 
+// syncFocusInputMode updates the input mode after focus moves to a window.
+// With default_terminal_mode on, a focused window that can take input gets
+// Terminal mode; Terminal mode is dropped when there is nothing to type into.
+// Copy mode is left to the caller.
+func (m *Model) syncFocusInputMode() {
+	fw, term := m.focusedTerminal()
+	canType := fw != nil && !fw.Minimized && term != nil
+	switch {
+	case canType && m.defaultTerminalMode && m.inputMode != ModeCopy:
+		m.inputMode = ModeTerminal
+	case !canType && m.inputMode == ModeTerminal:
+		m.inputMode = ModeNormal
+	}
+}
+
 // spawnPTYReader starts background goroutines that read PTY output and notify
 // the Bubble Tea program for rendering. Uses a two-stage pipeline:
 //

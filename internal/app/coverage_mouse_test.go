@@ -409,14 +409,18 @@ func TestCovMouseClickOnDockArea(t *testing.T) {
 }
 
 func TestCovMouseClickOnMenuBarArea(t *testing.T) {
-	// Click on menu bar row (y == 0) in terminal mode.
+	// Click on a menu label in the menu bar (y == 0) in terminal mode.
 	m := setupReadyModel()
 	m.inputMode = ModeTerminal
 
-	click := tea.MouseClickMsg(tea.Mouse{X: 50, Y: 0, Button: tea.MouseLeft})
+	x := m.menuBar.MenuXPositions()[0]
+	click := tea.MouseClickMsg(tea.Mouse{X: x, Y: 0, Button: tea.MouseLeft})
 	updated, _ := m.Update(click)
 	model := updated.(Model)
 
+	if model.menuBar.OpenIndex != 0 {
+		t.Fatalf("expected first menu to open, OpenIndex = %d", model.menuBar.OpenIndex)
+	}
 	// Should switch to normal mode.
 	if model.inputMode == ModeTerminal {
 		t.Error("clicking menu bar should exit terminal mode to normal mode")

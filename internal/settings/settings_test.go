@@ -1183,8 +1183,8 @@ func TestApplyToDefaultTerminalMode(t *testing.T) {
 	p.Toggle()
 
 	p.ApplyTo(&cfg)
-	if cfg.DefaultTerminalMode != true {
-		t.Error("expected DefaultTerminalMode to be true after toggle")
+	if cfg.DefaultTerminalMode != false {
+		t.Error("expected DefaultTerminalMode (default true) to be false after toggle")
 	}
 }
 

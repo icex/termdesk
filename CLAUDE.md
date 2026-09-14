@@ -89,6 +89,11 @@ apps/
 - **Normal** — window-management keys (h/j/k/l, n, w, …).
 - **Terminal** — everything goes to the PTY; prefix key (default `Ctrl+A`) gates WM actions.
 - **Copy** — vim-style scrollback. Uses a frozen snapshot while active (tmux-like).
+- `default_terminal_mode` (default on): spawning or focusing a window enters
+  Terminal. Focus paths call `syncFocusInputMode()` (restore, number keys,
+  quick switch, click, Exposé pick, minimize/close auto-focus), which also
+  drops Terminal when nothing is left to type into. Tab / next-window stepping
+  deliberately keeps the current mode so Normal-mode cycling still works.
 
 ## Sessions
 

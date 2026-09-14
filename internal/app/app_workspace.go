@@ -461,18 +461,14 @@ func (m *Model) restoreWorkspace(state *workspace.WorkspaceState, projectDir str
 	}
 	if fw := m.wm.FocusedWindow(); fw != nil && fw.Minimized {
 		// The focused window is minimized — find a visible non-minimized window instead.
-		found := false
 		for _, w := range m.wm.Windows() {
 			if w.Visible && !w.Minimized {
 				m.wm.FocusWindow(w.ID)
-				found = true
 				break
 			}
 		}
-		if !found {
-			m.inputMode = ModeNormal
-		}
 	}
+	m.syncFocusInputMode()
 
 	// Restore clipboard
 	if m.clipboard != nil && len(state.Clipboard) > 0 {

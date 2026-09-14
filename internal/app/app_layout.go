@@ -358,6 +358,7 @@ func (m *Model) minimizeWindow(w *window.Window) {
 		m.applyTilingLayout()
 	}
 	m.inputMode = ModeNormal
+	m.syncFocusInputMode()
 	m.updateDockReserved()
 }
 
@@ -375,6 +376,7 @@ func (m *Model) restoreMinimizedWindow(w *window.Window) {
 		}
 		// Match manual tiling behavior: keep slot ordering and just reapply layout.
 		m.wm.FocusWindowNoRaise(w.ID)
+		m.syncFocusInputMode()
 		// In tiling mode, restoring should participate in the tiled layout.
 		// Running a dock-restore animation here fights with tile animations and
 		// can leave stale geometry gaps after finalize.
@@ -382,6 +384,7 @@ func (m *Model) restoreMinimizedWindow(w *window.Window) {
 		return
 	}
 	m.wm.FocusWindow(w.ID)
+	m.syncFocusInputMode()
 	// Animate from dock to original position
 	dockY := m.height - 1
 	dockX := m.width / 2
@@ -409,7 +412,7 @@ func (m *Model) updateDockRunning() {
 		}
 		if term, ok := m.terminals[w.ID]; ok {
 			if vtTitle := term.Title(); vtTitle != "" && !isLocalShellTitle(vtTitle) {
-					w.Title = sanitizeTitle(vtTitle)
+				w.Title = sanitizeTitle(vtTitle)
 			}
 		}
 	}

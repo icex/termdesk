@@ -258,13 +258,7 @@ func (m *Model) finalizeAnimation(a *Animation) {
 		m.wm.RemoveWindow(a.WindowID)
 		m.updateDockReserved()
 		// After removing a window, the WM auto-focuses the next one.
-		// If that window is minimized (or no windows remain), prevent
-		// terminal mode — user shouldn't type into a hidden window.
-		if m.inputMode == ModeTerminal {
-			if fw := m.wm.FocusedWindow(); fw == nil || fw.Minimized {
-				m.inputMode = ModeNormal
-			}
-		}
+		m.syncFocusInputMode()
 		if m.tilingMode {
 			m.applyTilingLayout()
 		}

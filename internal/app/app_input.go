@@ -466,6 +466,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "enter", "space":
 			m.exitExpose()
 			m.inputMode = ModeNormal
+			m.syncFocusInputMode()
 			return m, tickAnimation()
 		case "backspace":
 			if len(m.exposeFilter) > 0 {
@@ -481,6 +482,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.selectExposeByIndex(idx)
 				m.exitExpose()
 				m.inputMode = ModeNormal
+				m.syncFocusInputMode()
 				return m, tickAnimation()
 			}
 			// Single printable character → append to filter
@@ -575,6 +577,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		m.syncFocusInputMode()
 		return m, nil
 	}
 	if key == m.keybindings.QuickPrevWindow {
@@ -590,6 +593,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		m.syncFocusInputMode()
 		return m, nil
 	}
 
@@ -798,6 +802,7 @@ func (m Model) handlePrefixAction(msg tea.KeyPressMsg, key string) (tea.Model, t
 		windows := m.wm.Windows()
 		if idx < len(windows) {
 			m.wm.FocusWindow(windows[idx].ID)
+			m.syncFocusInputMode()
 		}
 		return m, nil
 	}
@@ -882,6 +887,7 @@ func (m Model) handleNormalModeKey(msg tea.KeyPressMsg, key string) (tea.Model, 
 		windows := m.wm.Windows()
 		if idx < len(windows) {
 			m.wm.FocusWindow(windows[idx].ID)
+			m.syncFocusInputMode()
 		}
 		return m, nil
 	}

@@ -2136,3 +2136,49 @@ func TestCreateNewWorkspaceRelativePath(t *testing.T) {
 		t.Fatalf("expected workspace file at %s after relative path", wsPath)
 	}
 }
+
+func TestRestoreWorkspaceInputMode(t *testing.T) {
+	win := func(id string, minimized bool) workspace.WindowState {
+		return workspace.WindowState{
+			ID: id, Title: id, Command: "/bin/echo",
+			X: 2, Y: 2, Width: 50, Height: 15, Minimized: minimized,
+		}
+	}
+	tests := []struct {
+		name     string
+		disabled bool // default_terminal_mode = false
+		start    InputMode
+		windows  []workspace.WindowState
+		focused  string
+		want     InputMode
+	}{
+		{"visible focused window starts in terminal mode", false, ModeNormal,
+			[]workspace.WindowState{win("win-a", false)}, "win-a", ModeTerminal},
+		{"minimized focus falls back to a visible window", false, ModeNormal,
+			[]workspace.WindowState{win("win-min", true), win("win-vis", false)}, "win-min", ModeTerminal},
+		{"only minimized windows stay in normal mode", false, ModeNormal,
+			[]workspace.WindowState{win("win-min", true)}, "win-min", ModeNormal},
+		{"no windows leaves terminal mode", false, ModeTerminal,
+			nil, "", ModeNormal},
+		{"default_terminal_mode off keeps normal mode", true, ModeNormal,
+			[]workspace.WindowState{win("win-a", false)}, "win-a", ModeNormal},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := setupReadyModel()
+			m.defaultTerminalMode = !tt.disabled
+			m.inputMode = tt.start
+			m.restoreWorkspace(&workspace.WorkspaceState{
+				Version: 1, SavedAt: time.Now(), Windows: tt.windows, FocusedID: tt.focused,
+			}, "")
+			t.Cleanup(func() {
+				for _, term := range m.terminals {
+					term.Close()
+				}
+			})
+			if m.inputMode != tt.want {
+				t.Errorf("inputMode = %s, want %s", m.inputMode, tt.want)
+			}
+		})
+	}
+}

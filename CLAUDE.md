@@ -104,6 +104,9 @@ apps/
     using the sync markers as frame boundaries, 30ms min interval (~33fps cap).
 - Server injects a DECRQM reply after child start so BT enables sync wrapping
   even when `SSH_TTY` is set.
+- Reattach repaints via SIGWINCH → `WindowSizeMsg` → renderer erase. Needs
+  bubbletea ≥ v2.0.9: older renderers skipped the flush when the view and size
+  were unchanged, leaving a blank screen until the next keypress.
 
 ## Quake terminal
 
@@ -271,6 +274,9 @@ go test ./internal/workspace/ -v
 - Workspace tests use `t.TempDir()` for isolation.
 - The whole suite honours `TERMDESK_CONFIG_PATH` / `TERMDESK_HOME` so it never
   touches a real user config.
+- `go test ./internal/app/` rewrites `testdata/golden/*.golden` on every run,
+  and the dock/launcher lines depend on what's installed on `$PATH` — don't
+  commit that churn.
 
 ## Adding a keybinding
 

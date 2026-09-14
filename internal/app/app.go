@@ -21,7 +21,7 @@ import (
 	"github.com/icex/termdesk/pkg/geometry"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 // programRef holds a shared reference to the tea.Program.
 // Using a pointer so copies of Model (value receivers) share the same ref.

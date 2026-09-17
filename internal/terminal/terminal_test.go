@@ -1482,6 +1482,57 @@ func TestDisableModeOtherMode(t *testing.T) {
 	}
 }
 
+// A program that enables mouse reporting and dies without disabling it — ssh
+// losing its connection while a remote TUI owns the mouse — must not leave the
+// shell underneath receiving SGR reports ("65;20;67M") as typed input.
+func TestMouseModeDroppedWhenOwnerDies(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("foreground process group lookup reads /proc")
+	}
+	if _, err := os.Stat("/bin/bash"); err != nil {
+		t.Skip("needs /bin/bash for job control")
+	}
+	// set -m puts the child in its own foreground process group, like ssh
+	// under an interactive shell. SIGKILL gives it no chance to send DECRST.
+	script := `set -m
+bash -c 'printf "\033[?1003h\033[?1006h"; sleep 0.3; kill -9 $$'
+printf 'READY\n'
+IFS= read -r line
+printf 'GOT[%q]\n' "$line"
+exec sleep 5`
+	term, err := New("/bin/bash", []string{"-c", script}, 80, 24, 0, 0, "")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer term.Close()
+	go term.ReadPtyLoop()
+
+	waitFor := func(what string, cond func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s; screen:\n%s", what, term.CaptureBufferText())
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	waitFor("child to enable mouse reporting", term.HasMouseMode)
+	waitFor("child to die", func() bool { return strings.Contains(term.CaptureBufferText(), "READY") })
+
+	term.SendMouseWheel(uv.MouseWheelDown, 5, 3)
+	if term.HasMouseMode() {
+		t.Error("HasMouseMode should be false once the program that enabled it has exited")
+	}
+	term.WriteInput([]byte("END\n"))
+
+	waitFor("shell to read its input", func() bool { return strings.Contains(term.CaptureBufferText(), "GOT[") })
+	if screen := term.CaptureBufferText(); !strings.Contains(screen, "GOT[END]") {
+		t.Errorf("shell received mouse reports as input; screen:\n%s", screen)
+	}
+}
+
 func TestEmuWriteLoopViaReadOnce(t *testing.T) {
 	// Test that data read via ReadOnce gets processed by emuWriteLoop
 	term, err := New("/bin/echo", []string{"emu-loop-test"}, 80, 24, 0, 0, "")

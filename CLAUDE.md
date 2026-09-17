@@ -250,6 +250,11 @@ Debug log: `/tmp/termdesk-image.log`.
   → `osc52SetCmd`. Without this, copying from any app that has no local
   clipboard access (Claude Code over ssh, tmux, nvim with `clipboard=osc52`)
   silently does nothing. The wallpaper terminal is deliberately excluded.
+- Mouse modes outlive the program that set them. When ssh drops under a remote
+  TUI, the DECRST never arrives and the shell gets wheel reports typed in as
+  `65;20;67M`. `Terminal` records the foreground process group on mouse enable
+  and `releaseOrphanedMouse()` resets the emulator's mouse modes once that
+  group is gone — checked before every mouse decision. Linux only (`/proc`).
 
 ## Config
 

@@ -52,9 +52,10 @@ type Terminal struct {
 	scrollCap   int            // max scrollback lines
 	scrollWidth int            // width at which scrollback was captured
 
-	mouseMode int    // active mouse mode number (0 = none)
-	altScreen bool   // tracks whether the child app switched to alt screen
-	title     string // last OSC 0/2 window title from child app
+	mouseMode  int    // active mouse mode number (0 = none)
+	mouseOwner int    // foreground process group that enabled mouseMode (0 = unknown)
+	altScreen  bool   // tracks whether the child app switched to alt screen
+	title      string // last OSC 0/2 window title from child app
 	// Sync output (mode 2026) — when active, the child app is mid-frame.
 	// Rendering is suppressed until the sync block ends so we don't render
 	// partially-cleared screens and flicker while the app redraws.
@@ -237,8 +238,10 @@ func newTerminal(pty Pty, emu Emulator, cols, rows int) *Terminal {
 				case ansi.X10MouseMode, ansi.NormalMouseMode,
 					ansi.HighlightMouseMode, ansi.ButtonEventMouseMode,
 					ansi.AnyEventMouseMode:
+					owner := t.foregroundPgid()
 					t.mu.Lock()
 					t.mouseMode = mode.Mode()
+					t.mouseOwner = owner
 					t.mu.Unlock()
 				case ansi.ModeSynchronizedOutput:
 					t.mu.Lock()
@@ -1322,8 +1325,37 @@ func rowEqual(a, b []ScreenCell) bool {
 	return true
 }
 
+// mouseResetSeq turns off every mouse tracking mode and encoding.
+var mouseResetSeq = []byte(ansi.ResetMode(
+	ansi.ModeMouseX10, ansi.ModeMouseNormal, ansi.ModeMouseHighlight,
+	ansi.ModeMouseButtonEvent, ansi.ModeMouseAnyEvent,
+	ansi.ModeMouseExtUtf8, ansi.ModeMouseExtSgr,
+	ansi.ModeMouseExtUrxvt, ansi.ModeMouseExtSgrPixel,
+))
+
+// releaseOrphanedMouse turns mouse reporting off when the process group that
+// enabled it has exited without turning it off. The usual cause is ssh losing
+// its connection while a remote TUI owns the mouse: the remote DECRST never
+// arrives, and every wheel or click would otherwise be typed into the shell
+// underneath as "65;20;67M". Called before each mouse decision, so the stale
+// mode never produces a single report.
+func (t *Terminal) releaseOrphanedMouse() {
+	t.mu.Lock()
+	owner := t.mouseOwner
+	if t.closed || t.mouseMode == 0 || owner <= 0 || syscall.Kill(-owner, 0) != syscall.ESRCH {
+		t.mu.Unlock()
+		return
+	}
+	t.mouseOwner = 0
+	t.mu.Unlock()
+	// Through the emulator rather than just zeroing mouseMode: SendMouse encodes
+	// from the emulator's own mode table, and DisableMode clears mouseMode.
+	t.emu.Write(mouseResetSeq)
+}
+
 // HasMouseMode returns true if the child app has enabled any mouse reporting.
 func (t *Terminal) HasMouseMode() bool {
+	t.releaseOrphanedMouse()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.mouseMode != 0
@@ -1332,6 +1364,7 @@ func (t *Terminal) HasMouseMode() bool {
 // HasMouseMotionMode returns true if the child app tracks mouse motion
 // (ButtonEvent mode 1002 or AnyEvent mode 1003).
 func (t *Terminal) HasMouseMotionMode() bool {
+	t.releaseOrphanedMouse()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.mouseMode == ansi.ButtonEventMouseMode.Mode() || t.mouseMode == ansi.AnyEventMouseMode.Mode()
@@ -1469,6 +1502,7 @@ func (t *Terminal) SendKey(code rune, mod uv.KeyMod, text string) {
 // mouse mode — this prevents SGR sequences from appearing as "weird text".
 // col, row: 0-indexed coordinates relative to terminal content area.
 func (t *Terminal) SendMouse(button uv.MouseButton, col, row int, release bool) {
+	t.releaseOrphanedMouse()
 	t.mu.Lock()
 	closed := t.closed
 	t.mu.Unlock()
@@ -1493,6 +1527,7 @@ func (t *Terminal) SendMouse(button uv.MouseButton, col, row int, release bool) 
 // SendMouseMotion sends a mouse motion event through the emulator's input pipeline.
 // col, row: 0-indexed coordinates.
 func (t *Terminal) SendMouseMotion(button uv.MouseButton, col, row int) {
+	t.releaseOrphanedMouse()
 	t.mu.Lock()
 	closed := t.closed
 	t.mu.Unlock()
@@ -1508,6 +1543,7 @@ func (t *Terminal) SendMouseMotion(button uv.MouseButton, col, row int) {
 
 // SendMouseWheel sends a mouse wheel event through the emulator's input pipeline.
 func (t *Terminal) SendMouseWheel(button uv.MouseButton, col, row int) {
+	t.releaseOrphanedMouse()
 	t.mu.Lock()
 	closed := t.closed
 	t.mu.Unlock()

@@ -63,39 +63,14 @@ func vimSessionPath(windowID string) string {
 	return filepath.Join(dir, fmt.Sprintf("vim-%s.vim", windowID))
 }
 
-// signalAppsForCapture sends vim :mksession and SIGUSR1/OSC 667 signals
+// signalAppsForCapture sends SIGUSR1/OSC 667 signals to cooperating apps
 // to prepare apps for workspace state capture. This is fast (no blocking).
 // Call this before captureWorkspaceState() — for auto-save, responses from
 // the previous cycle's signals are already available.
 func (m *Model) signalAppsForCapture() {
-	// Build a map of foreground commands per window (for detecting nvim in shells).
-	type fgInfo struct {
-		command string
-		isVim   bool
-	}
-	fgCommands := make(map[string]fgInfo)
-	for _, w := range m.wm.Windows() {
-		if term, ok := m.terminals[w.ID]; ok {
-			cmd := term.ForegroundCommand()
-			fgCommands[w.ID] = fgInfo{command: cmd, isVim: isVimEditor(cmd)}
-		}
-	}
-
-	// Save vim sessions — check both stored command AND foreground process.
-	sessDir := vimSessionsDir()
-	for _, w := range m.wm.Windows() {
-		fg := fgCommands[w.ID]
-		if isVimEditor(w.Command) || fg.isVim {
-			if term, ok := m.terminals[w.ID]; ok {
-				if sessDir != "" {
-					os.MkdirAll(sessDir, 0755)
-					sessPath := vimSessionPath(w.ID)
-					term.WriteInput([]byte("\x1b:silent! wall\r:mksession! " + sessPath + "\r"))
-				}
-			}
-		}
-	}
-
+	// Workspace capture must not send editor keystrokes or write user documents.
+	// Editors keep their own swap/undo recovery; only cooperating bundled apps
+	// are asked for state through SIGUSR1.
 	// Request app state from terminals that support the protocol.
 	for _, w := range m.wm.Windows() {
 		if isAppStateCapable(w.Command) {
@@ -116,7 +91,9 @@ func (m *Model) captureWorkspaceState() workspace.WorkspaceState {
 		focusedID = focusedWin.ID
 	}
 	state := workspace.WorkspaceState{
-		FocusedID: focusedID,
+		FocusedID:   focusedID,
+		CapturedAt:  time.Now(),
+		SaveBlocked: m.workspaceSaveBlocked,
 	}
 
 	// Build a map of foreground commands per terminal (for detecting nvim in shells).
@@ -136,7 +113,7 @@ func (m *Model) captureWorkspaceState() workspace.WorkspaceState {
 	}
 
 	// captureTermState captures command, workdir, and buffer for a single terminal.
-	captureTermState := func(termID string, w *window.Window) (cmd string, args []string, workDir, bufFile string, bufRows, bufCols int) {
+	captureTermState := func(termID string, w *window.Window) (cmd string, args []string, workDir, bufContent string, bufRows, bufCols int) {
 		cmd = w.Command
 		if cmd == "" {
 			cmd = shell
@@ -156,10 +133,7 @@ func (m *Model) captureWorkspaceState() workspace.WorkspaceState {
 			if liveCWD := term.GetCWD(); liveCWD != "" {
 				workDir = liveCWD
 			}
-			bufContent := term.CaptureFullBuffer(1000)
-			if id := workspace.SaveBuffer(termID, bufContent); id != "" {
-				bufFile = id
-			}
+			bufContent = term.CaptureFullBuffer(1000)
 			bufRows = term.Height()
 			bufCols = term.Width()
 		}
@@ -172,7 +146,7 @@ func (m *Model) captureWorkspaceState() workspace.WorkspaceState {
 			continue
 		}
 
-		cmd, args, workDir, _, _, _ := captureTermState(w.ID, w)
+		cmd, args, workDir, bufContent, bufRows, bufCols := captureTermState(w.ID, w)
 
 		ws := workspace.WindowState{
 			ID:            w.ID,
@@ -215,24 +189,25 @@ func (m *Model) captureWorkspaceState() workspace.WorkspaceState {
 					}
 				}
 				ws.Panes = append(ws.Panes, workspace.PaneState{
-					TermID:     paneID,
-					Command:    pCmd,
-					Args:       pArgs,
-					WorkDir:    pWorkDir,
-					BufferFile: pBufFile,
-					BufferRows: pBufRows,
-					BufferCols: pBufCols,
+					TermID:        paneID,
+					Command:       pCmd,
+					Args:          pArgs,
+					WorkDir:       pWorkDir,
+					BufferContent: pBufFile,
+					BufferFile:    paneID,
+					BufferRows:    pBufRows,
+					BufferCols:    pBufCols,
 				})
 			}
 		} else {
 			// Single terminal — capture buffer and app state
 			if term, ok := m.terminals[w.ID]; ok {
-				bufContent := term.CaptureFullBuffer(1000)
-				if id := workspace.SaveBuffer(w.ID, bufContent); id != "" {
-					ws.BufferFile = id
+				ws.BufferContent = bufContent
+				if bufContent != "" {
+					ws.BufferFile = w.ID
 				}
-				ws.BufferRows = term.Height()
-				ws.BufferCols = term.Width()
+				ws.BufferRows = bufRows
+				ws.BufferCols = bufCols
 				if appState := term.AppState(); appState != "" {
 					ws.AppStateData = appState
 				}
@@ -256,19 +231,8 @@ func (m *Model) captureWorkspaceState() workspace.WorkspaceState {
 
 	// Note: We don't save notifications - they're transient UI state
 
-	// Cleanup stale buffer files (windows that no longer exist).
-	activeIDs := make(map[string]bool, len(state.Windows))
-	for _, ws := range state.Windows {
-		if ws.BufferFile != "" {
-			activeIDs[ws.BufferFile] = true
-		}
-		for _, p := range ws.Panes {
-			if p.BufferFile != "" {
-				activeIDs[p.BufferFile] = true
-			}
-		}
-	}
-	workspace.CleanupBuffers(activeIDs)
+	// Buffers are shared by saved and background workspaces. Never sweep the
+	// global store using only the active workspace's IDs.
 
 	return state
 }
@@ -287,7 +251,14 @@ func (m *Model) updateWorkspaceWidget(dir string) {
 
 // restoreWorkspace restores windows and state from saved WorkspaceState.
 // If projectDir is non-empty, changes the working directory to that path.
-func (m *Model) restoreWorkspace(state *workspace.WorkspaceState, projectDir string) {
+func (m *Model) restoreWorkspace(state *workspace.WorkspaceState, projectDir string) bool {
+	if state.SourcePath != "" && !state.Trusted {
+		m.workspaceSaveBlocked = true
+		m.notifications.Push("Workspace Needs Trust", "Inspect its commands, then run: termdesk trust "+state.SourcePath, notification.Warning)
+		return false
+	}
+
+	m.workspaceSaveBlocked = false
 	m.updateWorkspaceWidget(projectDir)
 
 	// Change to workspace directory if specified
@@ -477,15 +448,13 @@ func (m *Model) restoreWorkspace(state *workspace.WorkspaceState, projectDir str
 
 	// Note: We don't restore notifications - they're transient UI state, not part of the workspace
 	// nextTerminalNumber() dynamically computes the next available number from window titles.
+	return true
 }
 
 // switchToProject switches to a different project workspace.
 func (m *Model) switchToProject(projectPath string) tea.Cmd {
 	// Save current workspace to project-specific file
-	currentProjectDir := ""
-	if m.projectConfig != nil {
-		currentProjectDir = m.projectConfig.ProjectDir
-	}
+	currentProjectDir := m.workspaceProjectDir()
 	state := m.captureWorkspaceState()
 	go func() {
 		if err := workspace.SaveWorkspace(state, currentProjectDir); err != nil {
@@ -536,10 +505,12 @@ func (m *Model) switchToProject(projectPath string) tea.Cmd {
 // Signals apps and captures state non-blocking — relies on auto-save
 // having already sent signals in a previous cycle.
 func (m *Model) saveWorkspaceNow() {
-	projectDir := ""
-	if m.projectConfig != nil {
-		projectDir = m.projectConfig.ProjectDir
+	if m.workspaceSaveBlocked {
+		m.notifications.Push("Save Blocked", "Trust and reopen the saved workspace before saving over it.", notification.Warning)
+		return
 	}
+
+	projectDir := m.workspaceProjectDir()
 
 	m.signalAppsForCapture()
 	state := m.captureWorkspaceState()
@@ -591,10 +562,7 @@ func (m *Model) loadSelectedWorkspace() tea.Cmd {
 // stashCurrentWorkspace saves the current workspace state to disk and stashes
 // the window manager + terminals in backgroundWorkspaces so processes stay alive.
 func (m *Model) stashCurrentWorkspace() {
-	currentProjectDir := ""
-	if m.projectConfig != nil {
-		currentProjectDir = m.projectConfig.ProjectDir
-	}
+	currentProjectDir := m.workspaceProjectDir()
 
 	// Save workspace state to disk
 	state := m.captureWorkspaceState()
@@ -616,8 +584,9 @@ func (m *Model) stashCurrentWorkspace() {
 	wsPath := m.activeWorkspacePath
 	if wsPath != "" {
 		m.backgroundWorkspaces[wsPath] = &backgroundWorkspace{
-			wm:        m.wm,
-			terminals: m.terminals,
+			wm:          m.wm,
+			saveBlocked: m.workspaceSaveBlocked,
+			terminals:   m.terminals,
 		}
 	} else {
 		// No active path means global workspace — close terminals
@@ -631,7 +600,7 @@ func (m *Model) stashCurrentWorkspace() {
 // 1. Stash current workspace (keep processes alive)
 // 2. Restore from background if already opened, else load from disk
 func (m *Model) switchToWorkspace(workspacePath string) tea.Cmd {
-	projectDir := filepath.Dir(workspacePath)
+	projectDir := workspace.ProjectDirFromPath(workspacePath)
 	wsName := "Global Workspace"
 	if projectDir != "" {
 		wsName = filepath.Base(projectDir)
@@ -647,14 +616,17 @@ func (m *Model) switchToWorkspace(workspacePath string) tea.Cmd {
 	m.stashCurrentWorkspace()
 
 	// Change to workspace directory so new terminals get the right CWD
-	if err := os.Chdir(projectDir); err != nil {
-		dbg("switchToWorkspace: failed to chdir to %s: %v", projectDir, err)
-	}
+	if projectDir != "" {
+		if err := os.Chdir(projectDir); err != nil {
+			dbg("switchToWorkspace: failed to chdir to %s: %v", projectDir, err)
+		}
 
+	}
 	// Check if target workspace is already in background (previously opened)
 	if bg, ok := m.backgroundWorkspaces[workspacePath]; ok {
 		// Restore from background — processes are still alive
 		delete(m.backgroundWorkspaces, workspacePath)
+		m.workspaceSaveBlocked = bg.saveBlocked
 		m.wm = bg.wm
 		m.terminals = bg.terminals
 		m.wm.SetBounds(m.width, m.height)
@@ -666,6 +638,7 @@ func (m *Model) switchToWorkspace(workspacePath string) tea.Cmd {
 		recordWorkspaceAccess(workspacePath)
 	} else {
 		// Fresh load from disk
+		m.workspaceSaveBlocked = false
 		m.wm = window.NewManager(m.width, m.height)
 		m.wm.SetBounds(m.width, m.height)
 		m.wm.SetReserved(1, 1)
@@ -674,9 +647,10 @@ func (m *Model) switchToWorkspace(workspacePath string) tea.Cmd {
 		m.activeWorkspacePath = workspacePath
 
 		if ws, err := workspace.LoadWorkspace(projectDir); err == nil && ws != nil {
-			m.restoreWorkspace(ws, projectDir)
-			m.notifications.Push("Workspace Loaded", fmt.Sprintf("Loaded: %s (%d window(s))", wsName, len(ws.Windows)), notification.Info)
-			recordWorkspaceAccess(workspacePath)
+			if m.restoreWorkspace(ws, projectDir) {
+				m.notifications.Push("Workspace Loaded", fmt.Sprintf("Loaded: %s (%d window(s))", wsName, len(ws.Windows)), notification.Info)
+				recordWorkspaceAccess(workspacePath)
+			}
 		} else if err != nil {
 			m.notifications.Push("Load Failed", fmt.Sprintf("Could not load workspace %s: %s", wsName, err.Error()), notification.Error)
 		}
@@ -705,30 +679,30 @@ func (m *Model) switchToWorkspace(workspacePath string) tea.Cmd {
 
 // recordWorkspaceAccess adds a workspace to the access history in user config.
 func recordWorkspaceAccess(workspacePath string) {
-	cfg := config.LoadUserConfig()
+	err := config.UpdateUserConfig(func(cfg *config.UserConfig) {
 
-	// Remove existing entry for this path
-	var filtered []config.WorkspaceHistoryEntry
-	for _, entry := range cfg.RecentWorkspaces {
-		if entry.Path != workspacePath {
-			filtered = append(filtered, entry)
+		// Remove existing entry for this path
+		var filtered []config.WorkspaceHistoryEntry
+		for _, entry := range cfg.RecentWorkspaces {
+			if entry.Path != workspacePath {
+				filtered = append(filtered, entry)
+			}
 		}
-	}
 
-	// Prepend new entry at the top
-	newEntry := config.WorkspaceHistoryEntry{
-		Path:       workspacePath,
-		LastAccess: time.Now(),
-	}
-	cfg.RecentWorkspaces = append([]config.WorkspaceHistoryEntry{newEntry}, filtered...)
+		// Prepend new entry at the top
+		newEntry := config.WorkspaceHistoryEntry{
+			Path:       workspacePath,
+			LastAccess: time.Now(),
+		}
+		cfg.RecentWorkspaces = append([]config.WorkspaceHistoryEntry{newEntry}, filtered...)
 
-	// Cap at 20 workspaces
-	if len(cfg.RecentWorkspaces) > 20 {
-		cfg.RecentWorkspaces = cfg.RecentWorkspaces[:20]
-	}
+		// Cap at 20 workspaces
+		if len(cfg.RecentWorkspaces) > 20 {
+			cfg.RecentWorkspaces = cfg.RecentWorkspaces[:20]
+		}
 
-	// Save config
-	if err := config.SaveUserConfig(cfg); err != nil {
+	})
+	if err != nil {
 		logging.Error("config save failed: %v", err)
 	}
 }
@@ -803,6 +777,7 @@ func (m *Model) createNewWorkspace(name, path string) {
 		dbg("createNewWorkspace: failed to chdir to %s: %v", absPath, err)
 	}
 
+	m.workspaceSaveBlocked = false
 	m.activeWorkspacePath = workspace.GetWorkspacePath(absPath)
 	m.updateDockReserved()
 
@@ -1033,4 +1008,14 @@ func (m *Model) renderWorkspacePicker(buf *Buffer) {
 	for i, ch := range hint {
 		buf.SetCell(hintX+i, hintY, ch, subtleColor, bgColor, 0)
 	}
+}
+
+func (m *Model) workspaceProjectDir() string {
+	if m.activeWorkspacePath != "" {
+		return workspace.ProjectDirFromPath(m.activeWorkspacePath)
+	}
+	if m.projectConfig != nil {
+		return m.projectConfig.ProjectDir
+	}
+	return ""
 }

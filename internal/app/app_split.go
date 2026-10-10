@@ -20,12 +20,20 @@ func (m *Model) splitPane(dir window.SplitDir) tea.Cmd {
 		return nil
 	}
 
+	oldRoot, oldFocus := fw.SplitRoot.Clone(), fw.FocusedPane
 	// Determine which terminal to split
 	currentTermID := fw.ID
 	if fw.IsSplit() && fw.FocusedPane != "" {
 		currentTermID = fw.FocusedPane
 	}
 
+	area := fw.ContentRect()
+	if fw.IsSplit() {
+		area = fw.SplitRoot.PaneRectForTerm(currentTermID, area)
+	}
+	if (dir == window.SplitHorizontal && area.Width < 2*window.MinPaneSize+1) || (dir == window.SplitVertical && area.Height < 2*window.MinPaneSize+1) {
+		return nil
+	}
 	// Generate ID for the new pane terminal
 	newTermID := newWindowID()
 
@@ -67,8 +75,8 @@ func (m *Model) splitPane(dir window.SplitDir) tea.Cmd {
 	}
 	if newRect.Width <= 0 || newRect.Height <= 0 {
 		// Area too small to split — revert
-		fw.SplitRoot = nil
-		fw.FocusedPane = ""
+		fw.SplitRoot = oldRoot
+		fw.FocusedPane = oldFocus
 		return nil
 	}
 
@@ -82,8 +90,8 @@ func (m *Model) splitPane(dir window.SplitDir) tea.Cmd {
 		m.cellPixelW, m.cellPixelH, workDir, graphicsEnv...)
 	if err != nil {
 		// Revert split
-		fw.SplitRoot = nil
-		fw.FocusedPane = ""
+		fw.SplitRoot = oldRoot
+		fw.FocusedPane = oldFocus
 		return nil
 	}
 

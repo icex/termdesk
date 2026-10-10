@@ -1924,3 +1924,21 @@ func TestNoSelfCollisionWhenTailVacates(t *testing.T) {
 func viewContent(v tea.View) string {
 	return v.Content
 }
+
+func TestFullBoardWinsWithoutSearchingForever(t *testing.T) {
+	m := newModelWithSeed(1)
+	m.snake = nil
+	for y := 0; y < fieldH; y++ {
+		for x := 0; x < fieldW; x++ {
+			m.snake = append(m.snake, point{x, y})
+		}
+	}
+	m.placeFood()
+	if !m.gameOver || !m.won {
+		t.Fatal("full board did not win")
+	}
+	m.reset()
+	if m.won || m.gameOver {
+		t.Fatal("restart retained win")
+	}
+}

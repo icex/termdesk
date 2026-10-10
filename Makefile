@@ -3,7 +3,7 @@ BUILD_DIR=bin
 GO=go
 GOFLAGS=-v
 
-.PHONY: all build run test test-coverage test-golden-update lint clean fmt vet
+.PHONY: all build run test test-coverage test-golden-update lint clean fmt vet test-e2e
 
 all: build
 
@@ -17,13 +17,16 @@ run: build
 test:
 	$(GO) test ./... -v -race -count=1
 
+test-e2e:
+	python3 scripts/test-e2e.py
+
 test-coverage:
 	$(GO) test ./... -coverprofile=coverage.out -covermode=atomic
 	$(GO) tool cover -func=coverage.out
 	@echo "To view in browser: go tool cover -html=coverage.out"
 
 test-golden-update:
-	$(GO) test ./... -update
+	$(GO) test ./internal/app -run '^TestGolden' -update
 
 lint: vet
 	@which golangci-lint > /dev/null 2>&1 || echo "golangci-lint not installed, skipping"

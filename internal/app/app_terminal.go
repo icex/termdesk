@@ -54,15 +54,7 @@ func removeKittyGeom(windowID string) {
 }
 
 // kittyDbg is a temporary debug logger for Kitty graphics integration.
-func kittyDbg(format string, args ...any) {
-	f, err := os.OpenFile("/tmp/termdesk-kitty.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	fmt.Fprintf(f, "[%s] ", time.Now().Format("15:04:05.000"))
-	fmt.Fprintf(f, format+"\n", args...)
-}
+func kittyDbg(format string, args ...any) { logging.Debug(format, args...) }
 
 // newWindowID generates a random window ID (16 hex chars).
 func newWindowID() string {
@@ -319,6 +311,14 @@ func (m *Model) createTerminalWindow(opts TerminalWindowOpts) tea.Cmd {
 	}
 	if err != nil {
 		logging.Error("createTerminalWindow: %v (cmd=%q)", err, opts.Command)
+		m.wm.RemoveWindow(id)
+		for i := len(m.animations) - 1; i >= 0; i-- {
+			if m.animations[i].WindowID == id {
+				m.animations = append(m.animations[:i], m.animations[i+1:]...)
+			}
+		}
+		m.syncFocusInputMode()
+		m.notifications.Push("Launch Failed", fmt.Sprintf("%s: %v", title, err), notification.Error)
 		return nil
 	}
 
@@ -513,19 +513,15 @@ func (m *Model) spawnPTYReader(windowID string, term *terminal.Terminal) {
 		term.SetOnKittyGraphics(func(cmd *terminal.KittyCommand, rawData []byte) *terminal.PlacementResult {
 			kittyDbg("onKittyGraphics callback: action=%c imageID=%d rawLen=%d", byte(cmd.Action), cmd.ImageID, len(rawData))
 			// Queries don't need window position — respond immediately.
-			// CRITICAL: Use WritePTYDirect (not WriteInput) for query responses.
-			// kitten icat sends graphics queries followed by a DA1 sentinel (ESC[c]).
-			// Our VT emulator's DA1 response goes through emu pipe → inputForwardLoop
-			// → pty.Write. If we use the async WriteInput channel, the DA1 response
-			// can arrive before our "OK", causing kitten to conclude no graphics.
-			// WritePTYDirect writes synchronously to the PTY master before the
-			// emulator even sees the DA1 query.
+			// Queue this reply before feeding the rest of the child's output.
+			// Native DA1 replies use the same queue, preserving their order
+			// without blocking the emulator on a child that stopped reading.
 			if cmd.Action == terminal.KittyActionQuery {
 				kp.ForwardCommand(cmd, rawData, windowID,
 					0, 0, 0, 0, 0, 0, 0, 0, 0, false,
 					func(data []byte) {
-						kittyDbg("query response via WritePTYDirect (%d bytes): %q", len(data), data)
-						term.WritePTYDirect(data)
+						kittyDbg("query response via QueueResponse (%d bytes): %q", len(data), data)
+						term.QueueResponse(data)
 					},
 				)
 				if out := kp.FlushPending(); len(out) > 0 {
@@ -768,6 +764,10 @@ func (m *Model) runProjectAutoStart() tea.Cmd {
 		return nil
 	}
 
+	if m.projectConfig.ConfigPath != "" && !m.projectConfig.Trusted {
+		m.notifications.Push("Project Needs Trust", "Inspect its commands, then run: termdesk trust "+m.projectConfig.ConfigPath, notification.Warning)
+		return nil
+	}
 	// Collect commands already running in existing windows
 	running := make(map[string]bool)
 	for _, w := range m.wm.Windows() {
@@ -923,10 +923,7 @@ func (m *Model) saveLauncherState() {
 		favs = append(favs, cmd)
 	}
 	go func() {
-		cfg := config.LoadUserConfig()
-		cfg.RecentApps = recentApps
-		cfg.Favorites = favs
-		if err := config.SaveUserConfig(cfg); err != nil {
+		if err := config.UpdateUserConfig(func(cfg *config.UserConfig) { cfg.RecentApps = recentApps; cfg.Favorites = favs }); err != nil {
 			logging.Error("config save failed: %v", err)
 		}
 	}()

@@ -1261,6 +1261,7 @@ func TestCUWorkspaceRestoreMsgNotPending(t *testing.T) {
 func TestCUWorkspaceRestoreMsgGlobalFallback(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("TERMDESK_HOME", tmpHome)
+	t.Setenv("TERMDESK_CONFIG_PATH", tmpHome+"/config.toml")
 
 	shell := os.Getenv("SHELL")
 	if shell == "" {

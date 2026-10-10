@@ -2111,19 +2111,19 @@ func TestResizeDirtyGracePeriod(t *testing.T) {
 	}
 }
 
-func TestWritePTYDirect(t *testing.T) {
+func TestQueueResponse(t *testing.T) {
 	term, err := New("/bin/cat", nil, 80, 24, 0, 0, "")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	defer term.Close()
 
-	// WritePTYDirect should not panic
-	term.WritePTYDirect([]byte("hello"))
+	// QueueResponse should not panic
+	term.QueueResponse([]byte("hello"))
 
-	// After close, WritePTYDirect should be a no-op
+	// After close, QueueResponse should be a no-op
 	term.Close()
-	term.WritePTYDirect([]byte("after close"))
+	term.QueueResponse([]byte("after close"))
 }
 
 // mockPty implements the Pty interface for testing.
@@ -3054,30 +3054,18 @@ func TestForwardCommandShmQueryRejected(t *testing.T) {
 	}
 }
 
-func TestForwardCommandFileMediumConversion(t *testing.T) {
+func TestForwardCommandRejectsFileTransport(t *testing.T) {
 	kp := newTestKP()
-
-	// Create a temp file for file medium conversion
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.png")
-	os.WriteFile(path, []byte("fake-image-data"), 0644)
-
-	cmd := &KittyCommand{
-		Action:   KittyActionTransmitPlace,
-		Medium:   KittyMediumTempFile,
-		FilePath: path,
-		Format:   KittyFormatPNG,
-		Width:    100,
-		Height:   200,
+	path := filepath.Join(t.TempDir(), "test.png")
+	os.WriteFile(path, []byte("fake-image-data"), 0600)
+	cmd := &KittyCommand{Action: KittyActionTransmitPlace, Medium: KittyMediumTempFile, FilePath: path, Format: KittyFormatPNG}
+	var reply []byte
+	result := kp.ForwardCommand(cmd, nil, "win1", 0, 0, 80, 24, 1, 1, 0, 0, 0, false, func(b []byte) { reply = b })
+	if result != nil || !bytes.Contains(reply, []byte("ENOTSUPPORTED")) {
+		t.Fatal("file transport not rejected")
 	}
-	result := kp.ForwardCommand(cmd, nil, "win1", 0, 0, 80, 24, 1, 1, 0, 0, 0, false, nil)
-	if result == nil {
-		t.Fatal("expected non-nil result for file medium conversion")
-	}
-
-	// File should be deleted (temp file medium)
-	if _, err := os.Stat(path); err == nil {
-		t.Error("temp file should be deleted after conversion")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("source file removed")
 	}
 }
 

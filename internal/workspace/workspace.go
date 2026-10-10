@@ -1,7 +1,9 @@
 package workspace
 
 import (
+	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -10,6 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/icex/termdesk/internal/fileutil"
+	"github.com/icex/termdesk/internal/trust"
+	"github.com/icex/termdesk/internal/window"
 	"github.com/icex/termdesk/pkg/geometry"
 )
 
@@ -28,6 +33,10 @@ func homeDir() string {
 
 // WorkspaceState represents the complete state of the workspace.
 type WorkspaceState struct {
+	SourcePath    string              // disk source, never serialized
+	Trusted       bool                // bound to the exact bytes loaded
+	SaveBlocked   bool                // preserve an untrusted workspace on shutdown
+	CapturedAt    time.Time           // orders concurrent saves, never serialized
 	Version       int                 // schema version (1)
 	SavedAt       time.Time           // when this was saved
 	Windows       []WindowState       // all windows
@@ -38,19 +47,20 @@ type WorkspaceState struct {
 
 // WindowState represents a single window's serializable state.
 type WindowState struct {
-	ID         string
-	Title      string
-	Command    string
-	Args       []string // command arguments
-	WorkDir    string   // working directory
-	X          int      // position
-	Y          int
-	Width      int
-	Height     int
-	ZIndex     int
-	Minimized  bool
-	Resizable  bool           // false for fixed-size windows (default true)
-	PreMaxRect *geometry.Rect // nil if not maximized
+	BufferContent string // compressed asynchronously by SaveWorkspace
+	ID            string
+	Title         string
+	Command       string
+	Args          []string // command arguments
+	WorkDir       string   // working directory
+	X             int      // position
+	Y             int
+	Width         int
+	Height        int
+	ZIndex        int
+	Minimized     bool
+	Resizable     bool           // false for fixed-size windows (default true)
+	PreMaxRect    *geometry.Rect // nil if not maximized
 
 	// ThemeOverride is the window's content theme name (empty = inherit global).
 	// Applies to terminal content only, not window chrome.
@@ -72,13 +82,14 @@ type WindowState struct {
 
 // PaneState represents a single pane's terminal state in a split window.
 type PaneState struct {
-	TermID     string
-	Command    string
-	Args       []string
-	WorkDir    string
-	BufferFile string // external gzip buffer file ID
-	BufferRows int
-	BufferCols int
+	BufferContent string // compressed asynchronously by SaveWorkspace
+	TermID        string
+	Command       string
+	Args          []string
+	WorkDir       string
+	BufferFile    string // external gzip buffer file ID
+	BufferRows    int
+	BufferCols    int
 }
 
 // buffersDir returns the directory for external buffer files.
@@ -100,25 +111,21 @@ func SaveBuffer(windowID, content string) string {
 	if dir == "" {
 		return ""
 	}
-	os.MkdirAll(dir, 0755)
-
-	path := filepath.Join(dir, windowID+".buf.gz")
-	f, err := os.Create(path)
-	if err != nil {
+	if !safeBufferID(windowID) || fileutil.EnsurePrivateDir(dir) != nil {
 		return ""
 	}
-	defer f.Close()
-
-	gz := gzip.NewWriter(f)
+	var compressed bytes.Buffer
+	gz := gzip.NewWriter(&compressed)
 	if _, err := gz.Write([]byte(content)); err != nil {
-		gz.Close()
-		os.Remove(path)
 		return ""
 	}
 	if err := gz.Close(); err != nil {
-		os.Remove(path)
 		return ""
 	}
+	if err := fileutil.WriteAtomic(filepath.Join(dir, windowID+".buf.gz"), compressed.Bytes()); err != nil {
+		return ""
+	}
+
 	return windowID
 }
 
@@ -126,7 +133,7 @@ func SaveBuffer(windowID, content string) string {
 // Returns "" if file doesn't exist or on error.
 func LoadBuffer(windowID string) string {
 	dir := buffersDir()
-	if dir == "" {
+	if dir == "" || !safeBufferID(windowID) {
 		return ""
 	}
 	path := filepath.Join(dir, windowID+".buf.gz")
@@ -149,28 +156,11 @@ func LoadBuffer(windowID string) string {
 	return string(data)
 }
 
-// CleanupBuffers removes buffer files not referenced by any window ID in the set.
-func CleanupBuffers(activeIDs map[string]bool) {
-	dir := buffersDir()
-	if dir == "" {
-		return
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if !strings.HasSuffix(name, ".buf.gz") {
-			continue
-		}
-		id := strings.TrimSuffix(name, ".buf.gz")
-		if !activeIDs[id] {
-			os.Remove(filepath.Join(dir, name))
-		}
+// CleanupBuffers removes unreferenced buffers only in this workspace's
+// namespace. It never sweeps legacy shared files or other workspaces.
+func CleanupBuffers(workspacePath string, activeIDs map[string]bool) {
+	if workspacePath != "" {
+		cleanupWorkspaceBuffers(bufferPrefix(workspacePath), activeIDs)
 	}
 }
 
@@ -194,7 +184,7 @@ func GetWorkspacePath(projectDir string) string {
 			return ""
 		}
 		dir := filepath.Join(home, ".config", "termdesk")
-		os.MkdirAll(dir, 0755)
+		os.MkdirAll(dir, 0700)
 		return filepath.Join(dir, "workspace.toml")
 	}
 
@@ -215,20 +205,78 @@ func ProjectDirFromPath(path string) string {
 
 // SaveWorkspace serializes and saves workspace state to disk.
 func SaveWorkspace(state WorkspaceState, projectDir string) error {
-	state.Version = 1
-	state.SavedAt = time.Now()
-
+	if state.SaveBlocked {
+		return fmt.Errorf("workspace needs trust before saving")
+	}
 	path := GetWorkspacePath(projectDir)
 	if path == "" {
 		return fmt.Errorf("could not determine workspace path")
 	}
+	return fileutil.WithLock(path, func() error {
+		if !state.CapturedAt.IsZero() {
+			if existing, err := os.ReadFile(path); err == nil {
+				old := &WorkspaceState{}
+				parseWorkspace(old, string(existing))
+				if old.SavedAt.After(state.CapturedAt) {
+					return nil
+				}
+			}
+		}
+		state.Version = 1
+		state.SavedAt = state.CapturedAt
+		if state.SavedAt.IsZero() {
+			state.SavedAt = time.Now()
+		}
+		prefix := bufferPrefix(path)
+		state.Windows = append([]WindowState(nil), state.Windows...)
+		for i := range state.Windows {
+			w := &state.Windows[i]
+			if w.BufferContent != "" {
+				w.BufferFile = SaveBuffer(prefix+w.ID, w.BufferContent)
+				if w.BufferFile == "" {
+					return fmt.Errorf("cannot save window buffer")
+				}
+			}
+			w.Panes = append([]PaneState(nil), w.Panes...)
+			for j := range w.Panes {
+				p := &w.Panes[j]
+				if p.BufferContent != "" {
+					p.BufferFile = SaveBuffer(prefix+p.TermID, p.BufferContent)
+					if p.BufferFile == "" {
+						return fmt.Errorf("cannot save pane buffer")
+					}
+				}
+			}
+		}
+		data := []byte(serializeWorkspace(state))
+		if err := fileutil.WriteAtomic(path, data); err != nil {
+			return err
+		}
+		if err := trust.RecordData(path, data); err != nil {
+			return err
+		}
+		active := map[string]bool{}
+		for _, w := range state.Windows {
+			active[w.BufferFile] = true
+			for _, p := range w.Panes {
+				active[p.BufferFile] = true
+			}
+		}
+		CleanupBuffers(path, active)
+		return nil
+	})
+}
 
-	content := serializeWorkspace(state)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0644); err != nil {
-		return err
+func safeBufferID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
 	}
-	return os.Rename(tmp, path)
+	for _, c := range id {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // LoadWorkspace loads workspace state from disk.
@@ -240,10 +288,14 @@ func LoadWorkspace(projectDir string) (*WorkspaceState, error) {
 		return nil, fmt.Errorf("could not determine workspace path")
 	}
 
-	data, err := os.ReadFile(path)
+	data, err := fileutil.ReadBounded(path, 10<<20)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil // no saved workspace
+		}
+		if info, e := os.Stat(path); e == nil && info.Size() > 10<<20 {
+			os.Remove(path)
+			return nil, fmt.Errorf("workspace file too large and has been removed")
 		}
 		return nil, err
 	}
@@ -255,7 +307,7 @@ func LoadWorkspace(projectDir string) (*WorkspaceState, error) {
 		return nil, fmt.Errorf("workspace file was corrupted (too large) and has been removed")
 	}
 
-	state := &WorkspaceState{}
+	state := &WorkspaceState{SourcePath: path, Trusted: trust.IsTrustedData(path, data)}
 	parseWorkspace(state, string(data))
 
 	// Validate the parsed state
@@ -281,7 +333,28 @@ func isValidWorkspace(state *WorkspaceState) bool {
 	if state.SavedAt.IsZero() || state.SavedAt.After(time.Now().Add(24*time.Hour)) {
 		return false
 	}
-	// All checks passed
+	if len(state.Windows) > 64 {
+		return false
+	}
+	for _, w := range state.Windows {
+		if w.Width < 1 || w.Height < 1 || w.Width > 4096 || w.Height > 4096 || w.Width*w.Height > 1<<20 {
+			return false
+		}
+		if w.BufferFile != "" && !safeBufferID(w.BufferFile) {
+			return false
+		}
+		if w.SplitTree != "" {
+			root := window.DecodeSplitTree(w.SplitTree)
+			if root == nil || root.PaneCount() != len(w.Panes) {
+				return false
+			}
+		}
+		for _, p := range w.Panes {
+			if !safeBufferID(p.TermID) || (p.BufferFile != "" && !safeBufferID(p.BufferFile)) {
+				return false
+			}
+		}
+	}
 	return true
 }
 
@@ -290,7 +363,7 @@ func serializeWorkspace(state WorkspaceState) string {
 	var sb strings.Builder
 	sb.WriteString("# Termdesk workspace state (auto-saved)\n\n")
 	sb.WriteString(fmt.Sprintf("version = %d\n", state.Version))
-	sb.WriteString(fmt.Sprintf("saved_at = \"%s\"\n", state.SavedAt.Format(time.RFC3339)))
+	sb.WriteString(fmt.Sprintf("saved_at = \"%s\"\n", state.SavedAt.Format(time.RFC3339Nano)))
 	sb.WriteString(fmt.Sprintf("focused_id = \"%s\"\n\n", state.FocusedID))
 
 	// Clipboard
@@ -439,7 +512,7 @@ func parseWorkspace(state *WorkspaceState, content string) {
 			case "version":
 				fmt.Sscanf(val, "%d", &state.Version)
 			case "saved_at":
-				state.SavedAt, _ = time.Parse(time.RFC3339, unescapeString(extractQuotedValue(val)))
+				state.SavedAt, _ = time.Parse(time.RFC3339Nano, unescapeString(extractQuotedValue(val)))
 			case "focused_id":
 				state.FocusedID = unescapeString(extractQuotedValue(val))
 			case "clipboard":
@@ -519,7 +592,7 @@ func parseWorkspace(state *WorkspaceState, content string) {
 			case "pane_count":
 				var n int
 				fmt.Sscanf(val, "%d", &n)
-				if n > 0 && currentWindow.Panes == nil {
+				if n > 0 && n <= 64 && currentWindow.Panes == nil {
 					currentWindow.Panes = make([]PaneState, n)
 				}
 			default:
@@ -702,5 +775,33 @@ func parsePaneField(w *WindowState, key, val string) {
 		fmt.Sscanf(val, "%d", &w.Panes[idx].BufferRows)
 	case "buffer_cols":
 		fmt.Sscanf(val, "%d", &w.Panes[idx].BufferCols)
+	}
+}
+
+// New saves use a workspace namespace. Legacy shared buffers remain readable
+// and are never swept, because other saved workspaces may still reference them.
+func bufferPrefix(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	if real, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+		path = filepath.Join(real, filepath.Base(path))
+	}
+	sum := sha256.Sum256([]byte(path))
+	return fmt.Sprintf("ws-%x-", sum[:10])
+}
+func cleanupWorkspaceBuffers(prefix string, active map[string]bool) {
+	entries, err := os.ReadDir(buffersDir())
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) || !strings.HasSuffix(e.Name(), ".buf.gz") {
+			continue
+		}
+		id := strings.TrimSuffix(e.Name(), ".buf.gz")
+		if !active[id] {
+			os.Remove(filepath.Join(buffersDir(), e.Name()))
+		}
 	}
 }

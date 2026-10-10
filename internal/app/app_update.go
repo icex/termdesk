@@ -259,7 +259,7 @@ func (m Model) handleUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.inputMode = ModeTerminal
 		}
 		if _, term := m.focusedTerminal(); term != nil {
-			term.WriteInput([]byte(msg.Content))
+			term.Paste(msg.Content)
 		}
 		return m, nil
 
@@ -441,8 +441,7 @@ func (m Model) handleUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					ww.Update(msg.CPU)
 				case *widget.MemoryWidget:
 					ww.UsedGB = msg.MemGB
-					_, totalGB := widget.ReadMemoryInfo()
-					ww.TotalGB = totalGB
+					ww.TotalGB = msg.MemTotalGB
 				case *widget.BatteryWidget:
 					ww.Pct = msg.BatPct
 					ww.Charging = msg.BatCharging
@@ -570,10 +569,7 @@ func (m Model) handleUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// 1. Project workspace (from .termdesk.toml project config)
 			// 2. Last accessed workspace (from recent history)
 			// 3. Global default workspace (~/.config/termdesk/workspace.toml)
-			projectDir := ""
-			if m.projectConfig != nil {
-				projectDir = m.projectConfig.ProjectDir
-			}
+			projectDir := m.workspaceProjectDir()
 			restored := false
 
 			// Priority 1: CWD workspace — always wins when projectDir is set.
@@ -584,13 +580,14 @@ func (m Model) handleUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				workspacePath := workspace.GetWorkspacePath(projectDir)
 				m.activeWorkspacePath = workspacePath
 				if state, err := workspace.LoadWorkspace(projectDir); err == nil && state != nil && len(state.Windows) > 0 {
-					m.restoreWorkspace(state, projectDir)
-					m.notifications.Push(
-						"Workspace Restored",
-						fmt.Sprintf("Restored %d window(s) from %s", len(state.Windows), filepath.Base(projectDir)),
-						notification.Info,
-					)
-					recordWorkspaceAccess(workspacePath)
+					if m.restoreWorkspace(state, projectDir) {
+						m.notifications.Push(
+							"Workspace Restored",
+							fmt.Sprintf("Restored %d window(s) from %s", len(state.Windows), filepath.Base(projectDir)),
+							notification.Info,
+						)
+						recordWorkspaceAccess(workspacePath)
+					}
 				}
 				restored = true
 			}
@@ -609,17 +606,18 @@ func (m Model) handleUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					entryDir := workspace.ProjectDirFromPath(entry.Path)
 					if state, err := workspace.LoadWorkspace(entryDir); err == nil && state != nil && len(state.Windows) > 0 {
 						m.activeWorkspacePath = entry.Path
-						m.restoreWorkspace(state, entryDir)
-						label := "last session"
-						if entryDir != "" {
-							label = filepath.Base(entryDir)
+						if m.restoreWorkspace(state, entryDir) {
+							label := "last session"
+							if entryDir != "" {
+								label = filepath.Base(entryDir)
+							}
+							m.notifications.Push(
+								"Workspace Restored",
+								fmt.Sprintf("Restored %d window(s) from %s", len(state.Windows), label),
+								notification.Info,
+							)
+							recordWorkspaceAccess(entry.Path)
 						}
-						m.notifications.Push(
-							"Workspace Restored",
-							fmt.Sprintf("Restored %d window(s) from %s", len(state.Windows), label),
-							notification.Info,
-						)
-						recordWorkspaceAccess(entry.Path)
 						restored = true
 						break
 					}
@@ -631,13 +629,14 @@ func (m Model) handleUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				workspacePath := workspace.GetWorkspacePath("")
 				m.activeWorkspacePath = workspacePath
 				if state, err := workspace.LoadWorkspace(""); err == nil && state != nil && len(state.Windows) > 0 {
-					m.restoreWorkspace(state, "")
-					m.notifications.Push(
-						"Workspace Restored",
-						fmt.Sprintf("Restored %d window(s) from saved session", len(state.Windows)),
-						notification.Info,
-					)
-					recordWorkspaceAccess(workspacePath)
+					if m.restoreWorkspace(state, "") {
+						m.notifications.Push(
+							"Workspace Restored",
+							fmt.Sprintf("Restored %d window(s) from saved session", len(state.Windows)),
+							notification.Info,
+						)
+						recordWorkspaceAccess(workspacePath)
+					}
 				}
 			}
 
@@ -729,16 +728,13 @@ func (m Model) handleUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			interval = time.Minute // minimum 1 minute
 		}
 		// Two-phase approach to avoid blocking:
-		// 1. Signal apps NOW (vim :mksession, SIGUSR1) — fast, non-blocking
+		// 1. Signal apps NOW (SIGUSR1) — fast, non-blocking
 		// 2. Capture state NOW — picks up responses from the PREVIOUS cycle's signals
 		// Since auto-save runs every 60s, apps have had plenty of time to respond.
-		m.signalAppsForCapture()
 		// Check if enough time has passed (use slightly less to ensure we don't miss)
 		if m.workspaceAutoSave && time.Since(m.lastWorkspaceSave) >= interval-5*time.Second {
-			projectDir := ""
-			if m.projectConfig != nil {
-				projectDir = m.projectConfig.ProjectDir
-			}
+			m.signalAppsForCapture()
+			projectDir := m.workspaceProjectDir()
 			state := m.captureWorkspaceState()
 			go func() {
 				_ = workspace.SaveWorkspace(state, projectDir)
@@ -772,12 +768,17 @@ func (m Model) handleUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case WallpaperRestartMsg:
+		if m.wallpaperMode == "program" && m.wallpaperTerminal == nil {
+			m.launchWallpaperTerminal()
+		}
+		return m, nil
 	case PtyClosedMsg:
 		// Wallpaper terminal — auto-restart if still in program mode.
 		if msg.WindowID == wallpaperTermID {
 			m.closeWallpaperTerminal()
 			if m.wallpaperMode == "program" && m.wallpaperProgram != "" {
-				m.launchWallpaperTerminal()
+				return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return WallpaperRestartMsg{} })
 			}
 			return m, nil
 		}
@@ -896,10 +897,11 @@ func appendCmd(existing tea.Cmd, cmd tea.Cmd) tea.Cmd {
 func (m Model) tickSystemStats() tea.Cmd {
 	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 		bat := widget.ReadBattery()
-		usedGB, _ := widget.ReadMemoryInfo()
+		usedGB, totalGB := widget.ReadMemoryInfo()
 		return SystemStatsMsg{
 			CPU:         widget.ReadCPUPercent(),
 			MemGB:       usedGB,
+			MemTotalGB:  totalGB,
 			BatPct:      bat.Percent,
 			BatCharging: bat.Charging,
 			BatPresent:  bat.Present,

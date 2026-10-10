@@ -371,7 +371,7 @@ func (m Model) handleCopyModeKey(msg tea.KeyPressMsg, key string) (tea.Model, te
 		m.exitCopyMode()
 		m.inputMode = ModeTerminal
 		if pasteText != "" {
-			term.WriteInput([]byte(pasteText))
+			term.Paste(pasteText)
 		}
 	case "up", "k":
 		step := 1
@@ -1032,7 +1032,7 @@ func (m Model) handleClipboardKey(key string) (tea.Model, tea.Cmd) {
 		text := m.clipboard.PasteSelected()
 		if text != "" {
 			if _, term := m.focusedTerminal(); term != nil {
-				term.WriteInput([]byte(text))
+				term.Paste(text)
 			}
 		}
 		m.clipboard.HideHistory()

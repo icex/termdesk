@@ -12,24 +12,18 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/term"
+	"github.com/icex/termdesk/internal/logging"
+	"github.com/icex/termdesk/internal/ttyprobe"
 )
 
 // imagePassDbg is a debug logger for sixel/iTerm2 image passthrough.
-func imagePassDbg(format string, args ...any) {
-	f, err := os.OpenFile("/tmp/termdesk-image.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	fmt.Fprintf(f, "[%s] ", time.Now().Format("15:04:05.000"))
-	fmt.Fprintf(f, format+"\n", args...)
-}
+func imagePassDbg(format string, args ...any) { logging.Debug(format, args...) }
 
 // ImageFormat identifies which image protocol a sequence uses.
 type ImageFormat int
 
 const (
-	ImageFormatSixel  ImageFormat = iota
+	ImageFormatSixel ImageFormat = iota
 	ImageFormatIterm2
 )
 
@@ -43,10 +37,10 @@ const maxImagePlacementsPerWindow = 10
 // We store the raw data and re-send after each frame (tmux-style).
 type ImagePlacement struct {
 	WindowID     string
-	GuestX       int         // cursor X in guest terminal at placement time
-	AbsoluteLine int         // scrollbackLen + cursorY at placement time
-	RawData      []byte      // complete DCS/OSC sequence
-	CellRows     int         // height in cell rows
+	GuestX       int    // cursor X in guest terminal at placement time
+	AbsoluteLine int    // scrollbackLen + cursorY at placement time
+	RawData      []byte // complete DCS/OSC sequence
+	CellRows     int    // height in cell rows
 	Format       ImageFormat
 	IsAltScreen  bool
 }
@@ -438,7 +432,6 @@ func (ip *ImagePassthrough) HasImagePlacements() bool {
 	return len(ip.placements) > 0
 }
 
-
 // ForwardRawSequence forwards a raw image sequence (sixel DCS or iTerm2 OSC)
 // directly to the host terminal without cursor positioning or placement storage.
 func (ip *ImagePassthrough) ForwardRawSequence(rawData []byte) {
@@ -545,7 +538,12 @@ func estimateIterm2CellRows(rawOSC []byte, contentCols, cellPixelW, cellPixelH i
 
 	imgW, imgH := parseImageDimensions(header)
 	imagePassDbg("estimateIterm2CellRows: headerLen=%d imgParsed=%dx%d magic=%x",
-		len(header), imgW, imgH, func() byte { if len(header) > 0 { return header[0] }; return 0 }())
+		len(header), imgW, imgH, func() byte {
+			if len(header) > 0 {
+				return header[0]
+			}
+			return 0
+		}())
 	if imgW <= 0 || imgH <= 0 {
 		return 0
 	}
@@ -1115,33 +1113,6 @@ func DetectSixelTTY() bool {
 		return false
 	}
 
-	done := make(chan bool, 1)
-	go func() {
-		buf := make([]byte, 256)
-		total := 0
-		for total < len(buf) {
-			n, err := tty.Read(buf[total:])
-			if n > 0 {
-				total += n
-				resp := string(buf[:total])
-				if strings.Contains(resp, "c") {
-					done <- strings.Contains(resp, ";4;") || strings.HasSuffix(resp, ";4c")
-					return
-				}
-			}
-			if err != nil {
-				break
-			}
-		}
-		done <- false
-	}()
-
-	select {
-	case ok := <-done:
-		return ok
-	case <-time.After(150 * time.Millisecond):
-		// 150ms is generous: most terminals respond in <50ms,
-		// but SSH latency can add ~100ms.
-		return false
-	}
+	resp := string(ttyprobe.ReadUntil(tty, 150*time.Millisecond, func(b []byte) bool { return bytes.ContainsRune(b, 'c') }))
+	return strings.Contains(resp, ";4;") || strings.HasSuffix(resp, ";4c")
 }

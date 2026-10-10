@@ -11,9 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/lipgloss"
-	tea "charm.land/bubbletea/v2"
 )
 
 func main() {
@@ -51,13 +51,14 @@ type point struct {
 
 // Serializable state for workspace persistence.
 type snakeState struct {
-	Snake    [][2]int `json:"s"`  // each point as [x,y]
+	Snake    [][2]int `json:"s"` // each point as [x,y]
 	Dir      int      `json:"d"`
 	NextDir  int      `json:"nd"`
 	FoodX    int      `json:"fx"`
 	FoodY    int      `json:"fy"`
 	Score    int      `json:"sc"`
 	SpeedMs  int64    `json:"sp"`
+	Won      bool     `json:"won"`
 	GameOver bool     `json:"go"`
 	Started  bool     `json:"st"`
 	Paused   bool     `json:"p"`
@@ -91,6 +92,7 @@ type model struct {
 	score    int
 	speed    time.Duration
 	gameOver bool
+	won      bool
 	started  bool // false until first directional input
 	paused   bool // true when game is paused
 	gen      int  // generation counter, incremented on reset to discard stale ticks
@@ -116,6 +118,7 @@ func newModel() model {
 				m.score = ss.Score
 				m.speed = time.Duration(ss.SpeedMs) * time.Millisecond
 				m.gameOver = ss.GameOver
+				m.won = ss.Won
 				m.started = ss.Started
 				m.paused = ss.Paused
 				m.gen = ss.Gen
@@ -153,13 +156,21 @@ func (m *model) placeFood() {
 	for _, p := range m.snake {
 		occupied[p] = true
 	}
-	for {
-		p := point{m.rng.IntN(fieldW), m.rng.IntN(fieldH)}
-		if !occupied[p] {
-			m.food = p
-			return
+	free := make([]point, 0, fieldW*fieldH-len(occupied))
+	for y := 0; y < fieldH; y++ {
+		for x := 0; x < fieldW; x++ {
+			p := point{x, y}
+			if !occupied[p] {
+				free = append(free, p)
+			}
 		}
 	}
+	if len(free) == 0 {
+		m.gameOver = true
+		m.won = true
+		return
+	}
+	m.food = free[m.rng.IntN(len(free))]
 }
 
 // reset restarts the game.
@@ -169,6 +180,7 @@ func (m *model) reset() {
 	m.dir = dirRight
 	m.nextDir = dirRight
 	m.gameOver = false
+	m.won = false
 	m.started = false
 	m.paused = false
 	m.gen++
@@ -206,6 +218,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Score:    m.score,
 			SpeedMs:  m.speed.Milliseconds(),
 			GameOver: m.gameOver,
+			Won:      m.won,
 			Started:  m.started,
 			Paused:   m.paused,
 			Gen:      m.gen,
@@ -237,6 +250,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case k.Code == 'p' || k.Code == 'P':
 			if m.started && !m.gameOver {
 				m.paused = !m.paused
+				m.gen++
 				if !m.paused {
 					return m, tick(m.speed, m.gen)
 				}
@@ -428,7 +442,11 @@ func (m model) View() tea.View {
 	} else if m.gameOver {
 		sb.WriteByte('\n')
 		goStyle := lipgloss.NewStyle().Foreground(gameOverFg).Background(fieldBg).Bold(true)
-		sb.WriteString(goStyle.Render(" GAME OVER — press 'r' to restart "))
+		if m.won {
+			sb.WriteString(goStyle.Render(" YOU WIN — press 'r' to restart "))
+		} else {
+			sb.WriteString(goStyle.Render(" GAME OVER — press 'r' to restart "))
+		}
 	}
 
 	// Footer with key hints.

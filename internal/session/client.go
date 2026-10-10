@@ -12,10 +12,14 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/term"
+	"github.com/icex/termdesk/internal/ttyprobe"
 )
 
 // Attach connects to the named session and proxies I/O until detach or disconnect.
 func Attach(name string) error {
+	if err := validateSocketDir(); err != nil {
+		return err
+	}
 	sockPath := SocketPath(name)
 
 	conn, err := net.Dial("unix", sockPath)
@@ -135,27 +139,7 @@ func probeSync2026(in *os.File, out *os.File) bool {
 	// Send DECRQM query for mode 2026
 	out.Write([]byte("\x1b[?2026$p"))
 
-	// Read response with timeout. Expected: \x1b[?2026;N$y
-	// where N=1(set), 2(reset), 3(permanently set) all mean supported.
-	// Use SetReadDeadline on the TTY fd to avoid orphaning a goroutine.
-	// TTYs support deadline-based I/O via kqueue/epoll on macOS/Linux.
-	var resp []byte
-	buf := make([]byte, 64)
-	deadline := time.Now().Add(100 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		in.SetReadDeadline(deadline)
-		n, err := in.Read(buf)
-		if n > 0 {
-			resp = append(resp, buf[:n]...)
-			if bytes.Contains(resp, []byte("$y")) {
-				break
-			}
-		}
-		if err != nil {
-			break
-		}
-	}
-	in.SetReadDeadline(time.Time{}) // clear deadline
+	resp := ttyprobe.ReadUntil(in, 100*time.Millisecond, func(b []byte) bool { return bytes.Contains(b, []byte("$y")) })
 
 	if len(resp) > 0 {
 		// Any valid DECRQM response means the terminal knows mode 2026.
@@ -320,7 +304,9 @@ func clientWriteLoop(in *os.File, conn net.Conn) error {
 	for {
 		n, err := in.Read(buf)
 		if n > 0 {
-			WriteMsg(conn, MsgInput, buf[:n])
+			if err := WriteMsg(conn, MsgInput, buf[:n]); err != nil {
+				return err
+			}
 		}
 		if err != nil {
 			return err

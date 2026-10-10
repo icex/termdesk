@@ -9,18 +9,12 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/term"
+	"github.com/icex/termdesk/internal/logging"
+	"github.com/icex/termdesk/internal/ttyprobe"
 )
 
 // kittyPassDbg is a temporary debug logger for Kitty graphics passthrough.
-func kittyPassDbg(format string, args ...any) {
-	f, err := os.OpenFile("/tmp/termdesk-kitty.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	fmt.Fprintf(f, "[%s] ", time.Now().Format("15:04:05.000"))
-	fmt.Fprintf(f, format+"\n", args...)
-}
+func kittyPassDbg(format string, args ...any) { logging.Debug(format, args...) }
 
 // KittyPassthrough manages forwarding Kitty graphics protocol sequences from
 // child PTY applications to the real host terminal. It remaps image IDs to
@@ -226,35 +220,8 @@ func detectKittyByTTYQuery() bool {
 		return false
 	}
 
-	// Read response in a goroutine with timeout.
-	// In raw mode (VMIN=1), Read blocks until data arrives.
-	// tty.Close() in the defer will unblock a stuck Read.
-	done := make(chan bool, 1)
-	go func() {
-		buf := make([]byte, 512)
-		total := 0
-		for total < len(buf) {
-			n, err := tty.Read(buf[total:])
-			if n > 0 {
-				total += n
-				if bytes.Contains(buf[:total], []byte("OK")) {
-					done <- true
-					return
-				}
-			}
-			if err != nil {
-				break
-			}
-		}
-		done <- false
-	}()
-
-	select {
-	case ok := <-done:
-		return ok
-	case <-time.After(500 * time.Millisecond):
-		return false
-	}
+	resp := ttyprobe.ReadUntil(tty, 500*time.Millisecond, func(b []byte) bool { return bytes.Contains(b, []byte("\x1b\\")) })
+	return bytes.Contains(resp, []byte("OK"))
 }
 
 // HostTermProgram returns the real host terminal's identity, or "".
@@ -313,26 +280,7 @@ func (kp *KittyPassthrough) getOrAllocateHostID(windowID string, guestID uint32)
 	return hostID
 }
 
-// readKittyFileMedium reads image data from a file-based medium (temp file,
-// regular file, or shared memory) and returns the raw bytes. Temp files and
-// shared memory segments are deleted after reading (the terminal is expected
-// to consume them).
-func readKittyFileMedium(medium KittyGraphicsMedium, filePath string) ([]byte, error) {
-	path := filePath
-	if medium == KittyMediumSharedMemory {
-		path = "/dev/shm/" + filePath
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	// Delete temp files and shared memory after reading — the protocol
-	// specifies that the terminal consumes them.
-	if medium == KittyMediumTempFile || medium == KittyMediumSharedMemory {
-		os.Remove(path)
-	}
-	return data, nil
-}
+const maxKittyImageSize = 4 << 20
 
 // ForwardCommand processes a Kitty graphics command from a child terminal.
 // ptyInput is called to send responses back to the child PTY.
@@ -363,47 +311,26 @@ func (kp *KittyPassthrough) ForwardCommand(
 		byte(cmd.Action), cmd.ImageID, byte(cmd.Medium), cmd.Format,
 		cmd.Width, cmd.Height, cmd.Rows, cmd.Columns, byte(cmd.Compression), cmd.More, cmd.FilePath, len(cmd.Data))
 
-	// Convert file-based mediums to direct transmission by reading the file.
-	// kitten icat prefers temp file or shared memory (faster than inline),
-	// but the host terminal receives our commands via /dev/tty so we must
-	// re-encode as direct inline base64 data.
-	// Treat unset (zero) medium as direct — parser default is 'd' but
-	// programmatically created commands may omit it.
+	// Terminal output has no authenticated association with local paths.
+	// Unsupported transports receive an error so clients can fall back to direct.
 	if cmd.Medium == 0 {
 		cmd.Medium = KittyMediumDirect
 	}
-	fileConverted := false
-	if (cmd.Action == KittyActionTransmit || cmd.Action == KittyActionTransmitPlace) &&
-		cmd.Medium != KittyMediumDirect && cmd.FilePath == "" {
-		kittyPassDbg("ForwardCommand: file medium %c but filePath is empty — file path decode failed", byte(cmd.Medium))
+	if cmd.Medium != KittyMediumDirect {
+		if ptyInput != nil && cmd.Quiet != 2 {
+			ptyInput(BuildKittyResponse(false, cmd.ImageID, "ENOTSUPPORTED"))
+		}
 		return nil
 	}
-	if (cmd.Action == KittyActionTransmit || cmd.Action == KittyActionTransmitPlace) &&
-		cmd.Medium != KittyMediumDirect && cmd.FilePath != "" {
-		fileData, err := readKittyFileMedium(cmd.Medium, cmd.FilePath)
-		if err != nil {
-			kittyPassDbg("ForwardCommand: failed to read file medium %c %q: %v", byte(cmd.Medium), cmd.FilePath, err)
-			return nil
+	if cmd.Width < 0 || cmd.Height < 0 || cmd.Width > 16384 || cmd.Height > 16384 || (cmd.Width > 0 && cmd.Height > 0 && int64(cmd.Width)*int64(cmd.Height) > 16<<20) || cmd.Rows < 0 || cmd.Columns < 0 || cmd.Rows > 4096 || cmd.Columns > 4096 {
+		if ptyInput != nil && cmd.Quiet != 2 {
+			ptyInput(BuildKittyResponse(false, cmd.ImageID, "EINVAL:image dimensions exceed limits"))
 		}
-		kittyPassDbg("ForwardCommand: converted file medium %c (%s) to direct (%d bytes), format=%d", byte(cmd.Medium), cmd.FilePath, len(fileData), cmd.Format)
-		cmd.Data = fileData
-		cmd.Medium = KittyMediumDirect
-		fileConverted = true
+		return nil
 	}
 
 	switch cmd.Action {
 	case KittyActionQuery:
-		// Reject shared memory queries — we can't reliably read POSIX shm
-		// (macOS has no /dev/shm, Linux has race conditions with async processing).
-		// kitten icat will fall back to temp file or direct transmission.
-		if cmd.Medium == KittyMediumSharedMemory {
-			resp := BuildKittyResponse(false, cmd.ImageID, "ENOTSUPPORTED")
-			kittyPassDbg("ForwardCommand: rejecting shm query imageID=%d", cmd.ImageID)
-			if ptyInput != nil {
-				ptyInput(resp)
-			}
-			return nil
-		}
 		resp := BuildKittyResponse(true, cmd.ImageID, "")
 		kittyPassDbg("ForwardCommand: query imageID=%d, sending response (%d bytes): %q", cmd.ImageID, len(resp), resp)
 		if ptyInput != nil {
@@ -413,15 +340,8 @@ func (kp *KittyPassthrough) ForwardCommand(
 
 	case KittyActionTransmit:
 		hasPending := kp.pendingDirect[windowID] != nil
-		if !cmd.More && !hasPending && !fileConverted {
-			// Simple transmit-only (no place, no file conversion) — forward raw directly.
-			// rawData is valid and contains the original APC payload.
-			kp.pendingOutput = append(kp.pendingOutput, "\x1b_G"...)
-			kp.pendingOutput = append(kp.pendingOutput, rawData...)
-			kp.pendingOutput = append(kp.pendingOutput, "\x1b\\"...)
-			return nil
-		}
-		// Chunked transmit, file-converted data, or pending — accumulate and re-encode.
+
+		// Transmit through the same remapping path for single and chunked images.
 		// For continuation chunks of a=T (transmit+place), the parser defaults
 		// to a=t. The pending struct preserves the AndPlace flag from the first chunk.
 		andPlace := false
@@ -477,6 +397,10 @@ func (kp *KittyPassthrough) forwardDirectTransmit(
 		kp.pendingDirect[windowID] = pending
 	}
 
+	if len(cmd.Data) > maxKittyImageSize-len(pending.Data) {
+		delete(kp.pendingDirect, windowID)
+		return nil
+	}
 	pending.Data = append(pending.Data, cmd.Data...)
 
 	if cmd.More {
@@ -498,11 +422,7 @@ func (kp *KittyPassthrough) forwardDirectTransmit(
 		kp.deleteAllWindowPlacements(windowID)
 	}
 
-	hostID := kp.allocateHostID()
-	if kp.imageIDMap[windowID] == nil {
-		kp.imageIDMap[windowID] = make(map[uint32]uint32)
-	}
-	kp.imageIDMap[windowID][pending.ImageID] = hostID
+	hostID := kp.getOrAllocateHostID(windowID, pending.ImageID)
 
 	encoded := base64.StdEncoding.EncodeToString(pending.Data)
 

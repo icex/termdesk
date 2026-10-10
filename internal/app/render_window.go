@@ -7,12 +7,11 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/mattn/go-runewidth"
-
 	"github.com/icex/termdesk/internal/config"
 	"github.com/icex/termdesk/internal/terminal"
 	"github.com/icex/termdesk/internal/window"
 	"github.com/icex/termdesk/pkg/geometry"
+	"github.com/mattn/go-runewidth"
 )
 
 // contentThemeCache memoizes parsed override themes by name. Built-in themes
@@ -244,13 +243,13 @@ func renderWindowChrome(buf *Buffer, w *window.Window, theme config.Theme, hover
 			curX += utf8.RuneCountInString(bellPrefix)
 		}
 		// Render remaining title text
-		remaining := string([]rune(fullTitle)[len([]rune(iconPrefix))+len([]rune(bellPrefix)):])
+		remaining := string([]rune(fullTitle)[min(len([]rune(fullTitle)), len([]rune(iconPrefix))+len([]rune(bellPrefix))):])
 		buf.SetStringCA(curX, titleRow, remaining+" ", titleFg, titleBg, AttrBold)
 	} else if bellPrefix != "" {
 		// No icon but has bell — render bell in yellow, then title
 		buf.SetStringCA(curX, titleRow, bellPrefix, levelYellow, titleBg, AttrBold)
 		curX += utf8.RuneCountInString(bellPrefix)
-		remaining := string([]rune(fullTitle)[len([]rune(bellPrefix)):])
+		remaining := string([]rune(fullTitle)[min(len([]rune(fullTitle)), len([]rune(bellPrefix))):])
 		buf.SetStringCA(curX, titleRow, remaining+" ", titleFg, titleBg, AttrBold)
 	} else {
 		buf.SetStringCA(curX, titleRow, fullTitle+" ", titleFg, titleBg, AttrBold)

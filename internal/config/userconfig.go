@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/icex/termdesk/internal/fileutil"
 )
 
 // WorkspaceHistoryEntry tracks when a workspace was last accessed.
@@ -305,6 +307,14 @@ func parseConfig(cfg *UserConfig, data string) {
 				continue
 			}
 
+			if currentCustomWidget != nil {
+				cfg.CustomWidgets = append(cfg.CustomWidgets, *currentCustomWidget)
+				currentCustomWidget = nil
+			}
+			if currentWorkspace != nil {
+				cfg.RecentWorkspaces = append(cfg.RecentWorkspaces, *currentWorkspace)
+				currentWorkspace = nil
+			}
 			section = sectionName
 			continue
 		}
@@ -595,12 +605,25 @@ func normalizeTilingLayout(layout string) string {
 
 // SaveUserConfig writes the user config to ~/.config/termdesk/config.toml.
 func SaveUserConfig(cfg UserConfig) error {
+	return fileutil.WithLock(configPath(), func() error { return saveUserConfig(cfg) })
+}
+
+// UpdateUserConfig preserves unrelated settings during concurrent updates.
+func UpdateUserConfig(update func(*UserConfig)) error {
+	return fileutil.WithLock(configPath(), func() error {
+		cfg := LoadUserConfig()
+		update(&cfg)
+		return saveUserConfig(cfg)
+	})
+}
+
+func saveUserConfig(cfg UserConfig) error {
 	dir := configDir()
 	if dir == "" {
 		return fmt.Errorf("cannot determine config directory")
 	}
 
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 
@@ -943,9 +966,5 @@ func SaveUserConfig(cfg UserConfig) error {
 	}
 
 	path := configPath()
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(sb.String()), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return fileutil.WriteAtomic(path, []byte(sb.String()))
 }

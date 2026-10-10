@@ -7,13 +7,13 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/icex/termdesk/internal/config"
 	"github.com/icex/termdesk/internal/terminal"
+	"github.com/icex/termdesk/internal/trust"
 	"github.com/icex/termdesk/internal/window"
 	"github.com/icex/termdesk/internal/workspace"
 	"github.com/icex/termdesk/pkg/geometry"
-
-	tea "charm.land/bubbletea/v2"
 )
 
 func setTestConfigPath(t *testing.T, dir string) string {
@@ -25,7 +25,7 @@ func setTestConfigPath(t *testing.T, dir string) string {
 
 func TestCaptureWorkspaceStateIncludesArgs(t *testing.T) {
 	m := setupReadyModel()
-	m.openTerminalWindowWith("go", []string{"test", "./..."}, "Tests", "/home/user")
+	m.openTerminalWindowWith("go", []string{"test", "./..."}, "Tests", t.TempDir())
 	m = completeAnimations(m)
 
 	state := m.captureWorkspaceState()
@@ -646,6 +646,9 @@ directory = "."
 title = "Auto"
 `), 0644)
 
+	if err := trust.Record(cfgPath); err != nil {
+		t.Fatal(err)
+	}
 	cmd := m.switchToProject(newProject)
 	if m.projectConfig == nil || m.projectConfig.ProjectDir != newProject {
 		t.Fatalf("expected projectConfig to be %s", newProject)

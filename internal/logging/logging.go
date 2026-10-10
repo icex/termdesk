@@ -11,6 +11,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/icex/termdesk/internal/fileutil"
+	"golang.org/x/sys/unix"
 )
 
 // Level represents a log severity.
@@ -51,12 +54,24 @@ func Init(level Level) {
 	if err != nil {
 		return
 	}
+	if override := os.Getenv("TERMDESK_HOME"); override != "" {
+		home = override
+	}
 	logPath := filepath.Join(home, ".local", "share", "termdesk", "termdesk.log")
-	os.MkdirAll(filepath.Dir(logPath), 0o755)
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err := fileutil.EnsurePrivateDir(filepath.Dir(logPath)); err != nil {
+		return
+	}
+	fd, err := unix.Open(logPath, unix.O_CREAT|unix.O_WRONLY|unix.O_APPEND|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0600)
 	if err != nil {
 		return
 	}
+	f := os.NewFile(uintptr(fd), logPath)
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		f.Close()
+		return
+	}
+	_ = f.Chmod(0600)
 	logFile = f
 
 	// Write header
@@ -92,6 +107,12 @@ func log(level Level, prefix, format string, args ...any) {
 	}
 	ts := time.Now().Format("15:04:05.000")
 	msg := fmt.Sprintf(format, args...)
+	if len(msg) > 16<<10 {
+		msg = msg[:16<<10] + " [truncated]"
+	}
+	if info, err := logFile.Stat(); err == nil && info.Size() > 2<<20 {
+		_ = logFile.Truncate(0)
+	}
 	fmt.Fprintf(logFile, "%s  %s  %s\n", ts, prefix, msg)
 }
 

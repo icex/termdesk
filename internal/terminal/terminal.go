@@ -4,10 +4,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
-	uv "github.com/charmbracelet/ultraviolet"
-	"github.com/charmbracelet/x/ansi"
-	"github.com/charmbracelet/x/vt"
-	"github.com/icex/termdesk/internal/logging"
 	"image/color"
 	"io"
 	"os"
@@ -16,6 +12,11 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/vt"
+	"github.com/icex/termdesk/internal/logging"
 )
 
 // ScreenCell captures a single cell's content and style for scrollback storage.
@@ -31,18 +32,21 @@ const defaultScrollbackCap = 10000
 
 // Terminal combines a PTY session with a VT emulator.
 type Terminal struct {
-	pty          Pty
-	emu          Emulator
-	closed       bool
-	cursorHidden bool // tracks whether the child app hid the cursor (DECTCEM)
-	mu           sync.Mutex
-	closeOnce    sync.Once
-	writeCh      chan []byte // buffered write channel for raw PTY input
-	emuCh        chan []byte // async emulator write channel
-	emuOverflow  []byte      // overflow buffer when emuCh is full (protected by mu)
-	done         chan struct{}
-	inputDone    chan struct{} // closed when inputForwardLoop exits
-	emuWriteDone chan struct{} // closed when emuWriteLoop exits
+	bracketedPaste  bool
+	kittyDiscard    bool
+	kittyDiscardESC bool
+	pty             Pty
+	emu             Emulator
+	closed          bool
+	cursorHidden    bool // tracks whether the child app hid the cursor (DECTCEM)
+	mu              sync.Mutex
+	closeOnce       sync.Once
+	writeCh         chan []byte // buffered write channel for raw PTY input
+	emuCh           chan []byte // async emulator write channel
+	emuOverflow     []byte      // overflow buffer when emuCh is full (protected by mu)
+	done            chan struct{}
+	inputDone       chan struct{} // closed when inputForwardLoop exits
+	emuWriteDone    chan struct{} // closed when emuWriteLoop exits
 
 	// Scrollback ring buffer — lines that scrolled off the top of the screen.
 	// Uses circular indexing for O(1) append without copying.
@@ -165,6 +169,9 @@ func (s *emuScreen) WidthMethod() uv.WidthMethod {
 // cellPixelW/cellPixelH are the cell pixel dimensions for TIOCGWINSZ and CSI query responses.
 // extraEnv contains additional environment variables (e.g. "KEY=value").
 func New(command string, args []string, cols, rows, cellPixelW, cellPixelH int, workDir string, extraEnv ...string) (*Terminal, error) {
+	if cols < 1 || rows < 1 || cols > 4096 || rows > 4096 || cols*rows > 1<<20 {
+		return nil, fmt.Errorf("invalid terminal dimensions: %dx%d", cols, rows)
+	}
 	p, err := NewPtySession(command, args, uint16(rows), uint16(cols), uint16(cellPixelW), uint16(cellPixelH), workDir, extraEnv...)
 	if err != nil {
 		return nil, err
@@ -196,6 +203,11 @@ func newTerminal(pty Pty, emu Emulator, cols, rows int) *Terminal {
 		scrollWidth:  cols,
 	}
 
+	if native, ok := emu.(*vt.SafeEmulator); ok {
+		wrapped := &scrollEmulator{SafeEmulator: native, onScroll: t.appendScrolledLine}
+		t.emu = wrapped
+		emu = wrapped
+	}
 	// Track cursor visibility, mouse mode, and alt screen via emulator callbacks.
 	if emu != nil {
 		emu.SetCallbacks(vt.Callbacks{
@@ -243,6 +255,10 @@ func newTerminal(pty Pty, emu Emulator, cols, rows int) *Terminal {
 					t.mouseMode = mode.Mode()
 					t.mouseOwner = owner
 					t.mu.Unlock()
+				case ansi.ModeBracketedPaste:
+					t.mu.Lock()
+					t.bracketedPaste = true
+					t.mu.Unlock()
 				case ansi.ModeSynchronizedOutput:
 					t.mu.Lock()
 					t.syncOutput = true
@@ -259,6 +275,10 @@ func newTerminal(pty Pty, emu Emulator, cols, rows int) *Terminal {
 					if t.mouseMode == mode.Mode() {
 						t.mouseMode = 0
 					}
+					t.mu.Unlock()
+				case ansi.ModeBracketedPaste:
+					t.mu.Lock()
+					t.bracketedPaste = false
 					t.mu.Unlock()
 				case ansi.ModeSynchronizedOutput:
 					t.mu.Lock()
@@ -743,6 +763,26 @@ type kittyAPCSegment struct {
 // The caller is responsible for feeding DataBefore to the emulator BEFORE
 // dispatching each Cmd, ensuring cursor position is accurate.
 func (t *Terminal) extractKittyAPCs(data []byte) (segments []kittyAPCSegment, trailing []byte) {
+	if t.kittyDiscard {
+		if t.kittyDiscardESC && len(data) > 0 && data[0] == '\\' {
+			t.kittyDiscard = false
+			data = data[1:]
+		} else {
+			end := bytes.Index(data, []byte("\x1b\\"))
+			termSize := 2
+			if bell := bytes.IndexByte(data, '\x07'); bell >= 0 && (end < 0 || bell < end) {
+				end = bell
+				termSize = 1
+			}
+			if end < 0 {
+				t.kittyDiscardESC = len(data) > 0 && data[len(data)-1] == '\x1b'
+				return nil, nil
+			}
+			t.kittyDiscard = false
+			data = data[end+termSize:]
+		}
+		t.kittyDiscardESC = false
+	}
 	// If we have a partial APC buffered from a previous call, prepend it.
 	if len(t.kittyAPCBuf) > 0 {
 		combined := make([]byte, len(t.kittyAPCBuf)+len(data))
@@ -781,6 +821,13 @@ func (t *Terminal) extractKittyAPCs(data []byte) (segments []kittyAPCSegment, tr
 			}
 			if terminated {
 				payload := data[apcStart:j]
+				if len(payload) > maxKittyImageSize {
+					segments = append(segments, kittyAPCSegment{DataBefore: data[lastCopy:i]})
+					i = end
+					lastCopy = end
+					found = true
+					break
+				}
 				cmd, _ := ParseKittyCommand(payload)
 				seg := kittyAPCSegment{
 					DataBefore: data[lastCopy:i],
@@ -796,7 +843,13 @@ func (t *Terminal) extractKittyAPCs(data []byte) (segments []kittyAPCSegment, tr
 		}
 		if !found {
 			// Incomplete APC — buffer from ESC_G onwards
-			t.kittyAPCBuf = append(t.kittyAPCBuf[:0], data[i:]...)
+			if len(data)-i > maxKittyImageSize {
+				t.kittyDiscard = true
+				t.kittyDiscardESC = data[len(data)-1] == '\x1b'
+				t.kittyAPCBuf = nil
+			} else {
+				t.kittyAPCBuf = append(t.kittyAPCBuf[:0], data[i:]...)
+			}
 			trailing = data[lastCopy:i]
 			return
 		}
@@ -877,7 +930,10 @@ func (t *Terminal) emuWriteLoop() {
 		// Batch: drain any additional pending chunks to reduce overhead.
 		for {
 			select {
-			case more := <-t.emuCh:
+			case more, ok := <-t.emuCh:
+				if !ok {
+					goto process
+				}
 				data = append(data, more...)
 			default:
 				goto process
@@ -960,9 +1016,8 @@ func (t *Terminal) emuWriteLoop() {
 }
 
 // safeEmuWrite processes a batch of emulator data with panic recovery.
-// It processes line-by-line (split at \n), checking row 0 after each line
-// to capture scrolled-off lines. Each \n causes at most 1 scroll, so
-// comparing row 0 is sufficient — no full-screen snapshot needed.
+// Real VT scroll events are captured by scrollEmulator; ordinary typing and
+// redraws do not create history or require per-cell snapshots.
 //
 // Kitty APC sequences are extracted and interleaved: data before each APC
 // is fed to the emulator first, ensuring CursorPosition() is accurate when
@@ -1014,7 +1069,7 @@ func (t *Terminal) safeEmuWrite(data []byte) {
 						t.mu.Unlock()
 
 						var nl []byte
-						for i := 0; i < result.Rows; i++ {
+						for i := 0; i < min(result.Rows, 4096); i++ {
 							nl = append(nl, '\n')
 						}
 						// Reset cursor X to column 0, matching real terminal behavior
@@ -1065,7 +1120,7 @@ func (t *Terminal) safeEmuWrite(data []byte) {
 				if cpH <= 0 {
 					cpH = 16 // reasonable default cell height in pixels
 				}
-				cellRows := (seg.PixelRows + cpH - 1) / cpH
+				cellRows := min(4096, max(0, (seg.PixelRows+cpH-1)/cpH))
 
 				imagePassDbg("safeEmuWrite: sixel seg pixelRows=%d cpH=%d cellRows=%d rawLen=%d",
 					seg.PixelRows, cpH, cellRows, len(seg.RawDCS))
@@ -1181,6 +1236,11 @@ func (t *Terminal) feedEmuData(data []byte) {
 		if fn != nil {
 			fn()
 		}
+	}
+
+	if _, native := t.emu.(*scrollEmulator); native {
+		t.emu.Write(data)
+		return
 	}
 
 	t.mu.Lock()
@@ -1398,23 +1458,10 @@ func (t *Terminal) ScrollbackLine(offset int) []ScreenCell {
 	return line
 }
 
-// WritePTYDirect writes bytes directly to the PTY master, bypassing the async
-// write channel. This is used for time-critical responses that must arrive
-// before other data (e.g. Kitty graphics query responses must arrive before
-// the DA1 sentinel response that the emulator generates). Thread-safe because
-// os.File.Write() acquires an internal lock.
-func (t *Terminal) WritePTYDirect(data []byte) {
-	t.mu.Lock()
-	if t.closed {
-		t.mu.Unlock()
-		return
-	}
-	p := t.pty
-	t.mu.Unlock()
-	if p != nil {
-		p.Write(data)
-	}
-}
+// QueueResponse enqueues a protocol reply before subsequent emulator responses.
+// All PTY input uses the same writer queue; a child that stops reading cannot
+// block the emulator, renderer, or input forwarder.
+func (t *Terminal) QueueResponse(data []byte) { t.WriteInput(data) }
 
 // WriteInput sends raw bytes to the PTY (keyboard input).
 // Non-blocking — writes are buffered and processed by the writer goroutine.
@@ -1466,7 +1513,7 @@ func (t *Terminal) inputForwardLoop() {
 			if closed {
 				return
 			}
-			t.pty.Write(buf[:n])
+			t.WriteInput(buf[:n])
 		}
 		if err != nil {
 			return
@@ -1682,6 +1729,10 @@ func (t *Terminal) Close() error {
 	})
 	t.mu.Unlock()
 
+	if pty != nil {
+		_ = pty.Close()
+	}
+
 	// Close the emulator's input pipe writer to unblock inputForwardLoop's
 	// emu.Read() with an error — without touching the emulator's internal
 	// closed field (avoids the Read/Close data race in the VT library).
@@ -1701,9 +1752,6 @@ func (t *Terminal) Close() error {
 
 	if emu != nil {
 		_ = emu.Close()
-	}
-	if pty != nil {
-		_ = pty.Close()
 	}
 	return nil
 }
@@ -1806,32 +1854,24 @@ func (t *Terminal) CaptureBufferText() string {
 // Captures up to maxLines total lines (scrollback oldest→newest, then visible).
 // Trailing blank lines are stripped. Each line is right-trimmed of spaces.
 func (t *Terminal) CaptureFullBuffer(maxLines int) string {
-	// Phase 1: Copy scrollback data under t.mu.
+	if maxLines < 1 {
+		return ""
+	}
+	width := t.emu.Width()
+	height := t.emu.Height()
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
 		return ""
 	}
-	scrollLen := t.scrollLen
-	scrollCap := t.scrollCap
-	scrollHead := t.scrollHead
-
-	// Copy scrollback rows under lock (oldest first).
+	scrollLen := min(t.scrollLen, max(0, maxLines-height))
+	// Rows are immutable after publication; retaining references is sufficient.
 	scrollCopy := make([][]ScreenCell, scrollLen)
-	for i := 0; i < scrollLen; i++ {
-		idx := (scrollHead - scrollLen + i + scrollCap) % scrollCap
-		src := t.scrollRing[idx]
-		if src != nil {
-			row := make([]ScreenCell, len(src))
-			copy(row, src)
-			scrollCopy[i] = row
-		}
+	for i := range scrollCopy {
+		idx := (t.scrollHead - scrollLen + i + t.scrollCap) % t.scrollCap
+		scrollCopy[i] = t.scrollRing[idx]
 	}
 	t.mu.Unlock()
-
-	// Phase 2: Access emulator WITHOUT holding t.mu to prevent ABBA deadlock.
-	width := t.emu.Width()
-	height := t.emu.Height()
 
 	totalLines := scrollLen + height
 	if totalLines > maxLines {
@@ -1856,8 +1896,13 @@ func (t *Terminal) CaptureFullBuffer(maxLines int) string {
 	for i := offset; i < scrollLen; i++ {
 		lb.Reset()
 		row := scrollCopy[i]
+		last := len(row)
+		for last > 0 && (row[last-1].Content == "" || row[last-1].Content == " ") {
+			last--
+		}
+		lb.Grow(last)
 		if row != nil {
-			for _, cell := range row {
+			for _, cell := range row[:last] {
 				if cell.Content == "" {
 					lb.WriteByte(' ')
 				} else {
@@ -1868,19 +1913,20 @@ func (t *Terminal) CaptureFullBuffer(maxLines int) string {
 		lines = append(lines, strings.TrimRight(lb.String(), " "))
 	}
 
-	// Visible screen lines (emulator access without t.mu).
-	for y := 0; y < height; y++ {
-		lb.Reset()
-		for x := 0; x < width; x++ {
-			cell := t.emu.CellAt(x, y)
-			if cell == nil || cell.Content == "" {
-				lb.WriteByte(' ')
-			} else {
-				lb.WriteString(cell.Content)
-			}
-		}
-		lines = append(lines, strings.TrimRight(lb.String(), " "))
+	// Use the native adapter's stable text snapshot when available.
+	var visible []string
+	if native, ok := t.emu.(*scrollEmulator); ok {
+		visible = native.TextLines()
+	} else {
+		screen := newTextScreen(width, height)
+		t.emu.Draw(screen, uv.Rect(0, 0, width, height))
+		visible = screen.Lines()
 	}
+
+	if len(visible) > maxLines {
+		visible = visible[len(visible)-maxLines:]
+	}
+	lines = append(lines, visible...)
 
 	// Strip trailing blank lines.
 	for len(lines) > 0 && lines[len(lines)-1] == "" {
@@ -2021,10 +2067,31 @@ func (t *Terminal) RestoreBuffer(content string) {
 
 		// Write visible portion to emulator WITHOUT holding t.mu.
 		visible := strings.Join(lines[len(lines)-height:], "\r\n")
-		t.emu.Write([]byte(visible))
+		t.restoreVisible([]byte(visible))
 	} else {
 		// Fits on screen — write all to emulator WITHOUT holding t.mu.
 		visible := strings.ReplaceAll(content, "\n", "\r\n")
-		t.emu.Write([]byte(visible))
+		t.restoreVisible([]byte(visible))
 	}
+}
+
+// Paste respects the application's bracketed-paste mode so pasted newlines do
+// not become Enter keystrokes. Strip embedded terminators from protected paste.
+func (t *Terminal) Paste(text string) {
+	t.mu.Lock()
+	protected := t.bracketedPaste
+	t.mu.Unlock()
+	if protected {
+		text = "\x1b[200~" + strings.ReplaceAll(text, "\x1b[201~", "") + "\x1b[201~"
+	}
+	t.WriteInput([]byte(text))
+}
+
+func (t *Terminal) restoreVisible(data []byte) {
+	if e, ok := t.emu.(*scrollEmulator); ok {
+		e.RestoreVisible(data)
+		return
+	}
+	t.emu.Write([]byte("\x1b[2J\x1b[H"))
+	t.emu.Write(data)
 }

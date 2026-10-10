@@ -40,8 +40,9 @@ type renderCache struct {
 // backgroundWorkspace holds a stashed workspace's window manager and terminals
 // so processes stay alive when switching between workspaces.
 type backgroundWorkspace struct {
-	wm        *window.Manager
-	terminals map[string]*terminal.Terminal
+	saveBlocked bool
+	wm          *window.Manager
+	terminals   map[string]*terminal.Terminal
 }
 
 // Model is the root model for the termdesk application.
@@ -182,6 +183,8 @@ type Model struct {
 	wallpaperConfig         *WallpaperConfig                // pre-computed wallpaper config for rendering
 	wallpaperLaunchFailures int                             // consecutive spawn failures (for backoff)
 	wallpaperLastLaunch     time.Time                       // timestamp of last spawn attempt (for backoff)
+
+	workspaceSaveBlocked bool // unapproved source must not be overwritten
 }
 
 // kittyPendingBuf accumulates Kitty graphics output during Update().
@@ -436,6 +439,7 @@ func (m *Model) cycleInputMode() {
 type SystemStatsMsg struct {
 	CPU         float64
 	MemGB       float64
+	MemTotalGB  float64
 	BatPct      float64
 	BatCharging bool
 	BatPresent  bool

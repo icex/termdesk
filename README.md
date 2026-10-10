@@ -70,6 +70,7 @@ go build -o bin/termdesk ./cmd/termdesk
 - Vim-style copy mode with search, word/paragraph motions and stable snapshot scrolling
 - Click-drag text selection (tmux-style)
 - Image passthrough: sixel, iTerm2 inline images and the kitty graphics protocol
+  (direct transmission; filesystem/shared-memory transports are rejected)
 - Hold-open on exit — terminal stays open after the process exits; `r` restarts, `q` closes
 
 **Sessions**
@@ -186,8 +187,32 @@ command    = "nano"
 position   = 2
 ```
 
-`termdesk ~/myproject` opens the directory, creates a named session, runs
-auto-start commands and applies the project's dock items.
+`termdesk ~/myproject` opens the directory and creates a session whose name
+includes a hash of the canonical path, so projects with equal directory names
+remain separate. Its workspace saves there even without `.termdesk.toml`.
+
+Project auto-start and restored workspace commands require approval for the
+exact file contents. Inspect the commands first, then approve the files:
+
+```bash
+termdesk trust ~/myproject                 # config and project workspace
+termdesk trust ~/.config/termdesk/workspace.toml
+```
+
+Files saved by Termdesk are approved automatically. Existing or copied workspace
+files need approval before their commands run. Editing or replacing an approved
+file invalidates its approval. Reopen the project/workspace after approving it.
+An unapproved workspace is preserved rather than overwritten by auto-save.
+
+Workspace files and terminal buffers use private permissions and atomic writes.
+Buffer cleanup is scoped to each workspace; legacy shared buffers remain
+readable and are retained so other saved workspaces keep their history.
+Workspace capture does not send editor keystrokes or write modified documents.
+Vim/Neovim keep their own swap/undo recovery; save documents explicitly.
+
+Kitty clients must use direct transmission. Filesystem and shared-memory image
+requests cannot be authenticated from terminal output, including output from SSH,
+and are rejected. Clients that negotiate transports can fall back to direct mode.
 
 ## Sessions
 
@@ -198,6 +223,7 @@ termdesk new work         # create a named session
 termdesk ls               # list sessions
 termdesk attach work      # reattach
 termdesk kill work        # kill
+termdesk trust ~/project  # approve inspected project/workspace commands
 ```
 
 Press `F12` (or **File → Detach**) to detach. The session keeps running.
@@ -300,6 +326,19 @@ apps/
 ```
 
 See [`CLAUDE.md`](CLAUDE.md) for development notes and gotchas.
+
+Review regression checks:
+
+```bash
+go test -race ./...
+go vet ./...
+python3 scripts/test-e2e.py
+```
+
+The end-to-end script builds a temporary binary and uses its own config, trust,
+buffers, sockets, and controlling PTYs. It never connects to existing sessions.
+Golden render tests compare fixtures by default; update them deliberately with
+`go test ./internal/app -run '^TestGolden' -update`.
 
 ## License
 

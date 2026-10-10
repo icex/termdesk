@@ -19,6 +19,7 @@ import (
 	"github.com/icex/termdesk/internal/tour"
 	"github.com/icex/termdesk/internal/widget"
 	"github.com/icex/termdesk/internal/window"
+	"github.com/icex/termdesk/internal/workspace"
 )
 
 func New() Model {
@@ -108,9 +109,14 @@ func New() Model {
 	// terminal pixel size. Without this, image viewers fall back to pixelated ANSI.
 	cellPxW, cellPxH := queryCellPixelSize()
 
+	initialWorkspacePath := ""
+	if projectDir := os.Getenv("TERMDESK_PROJECT_DIR"); projectDir != "" {
+		initialWorkspacePath = workspace.GetWorkspacePath(projectDir)
+	}
 	am := BuildActionMap(userCfg.Keys)
 	m := Model{
 		wm:                    window.NewManager(80, 24),
+		activeWorkspacePath:   initialWorkspacePath,
 		theme:                 theme,
 		terminals:             make(map[string]*terminal.Terminal),
 		menuBar:               mb,
@@ -128,8 +134,8 @@ func New() Model {
 		widgetRegistry:        widgetReg,
 		customWidgets:         customWidgets,
 		enabledWidgets:        enabledWidgets,
-		barUsername:            username,
-		barDisplayName:         displayName,
+		barUsername:           username,
+		barDisplayName:        displayName,
 		workspaceWidget:       wsWidget,
 		exePath:               exePath,
 		cache:                 &renderCache{updateGen: 1},

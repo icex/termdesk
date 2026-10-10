@@ -341,7 +341,5 @@ func (m *Model) showKeyboardTooltip() {
 
 // saveTourCompleted marks the guided tour as completed in user config.
 func (m *Model) saveTourCompleted() {
-	cfg := config.LoadUserConfig()
-	cfg.TourCompleted = true
-	config.SaveUserConfig(cfg)
+	config.UpdateUserConfig(func(cfg *config.UserConfig) { cfg.TourCompleted = true })
 }

@@ -179,7 +179,7 @@ func (m *Model) captureWorkspaceState() workspace.WorkspaceState {
 			ws.FocusedPane = w.FocusedPane
 			paneIDs := w.SplitRoot.AllTermIDs()
 			for _, paneID := range paneIDs {
-				pCmd, pArgs, pWorkDir, pBufFile, pBufRows, pBufCols := captureTermState(paneID, w)
+				pCmd, pArgs, pWorkDir, pBufContent, pBufRows, pBufCols := captureTermState(paneID, w)
 				// Per-pane command: use the terminal's own ForegroundCommand or shell
 				if term, ok := m.terminals[paneID]; ok {
 					fgCmd := term.ForegroundCommand()
@@ -193,11 +193,13 @@ func (m *Model) captureWorkspaceState() workspace.WorkspaceState {
 					Command:       pCmd,
 					Args:          pArgs,
 					WorkDir:       pWorkDir,
-					BufferContent: pBufFile,
-					BufferFile:    paneID,
+					BufferContent: pBufContent,
 					BufferRows:    pBufRows,
 					BufferCols:    pBufCols,
 				})
+				if pBufContent != "" {
+					ws.Panes[len(ws.Panes)-1].BufferFile = paneID
+				}
 			}
 		} else {
 			// Single terminal — capture buffer and app state
@@ -1018,4 +1020,11 @@ func (m *Model) workspaceProjectDir() string {
 		return m.projectConfig.ProjectDir
 	}
 	return ""
+}
+
+// blockUnreadableWorkspace stops autosave from replacing a workspace file that
+// failed to load, so a damaged or unreadable file is never silently lost.
+func (m *Model) blockUnreadableWorkspace(path string, err error) {
+	m.workspaceSaveBlocked = true
+	m.notifications.Push("Workspace Unreadable", fmt.Sprintf("%v. Saving is paused until %s is fixed or removed.", err, path), notification.Warning)
 }

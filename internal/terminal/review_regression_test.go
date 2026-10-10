@@ -150,3 +150,12 @@ func TestNonReadingChildDoesNotBlockInputForwarder(t *testing.T) {
 		t.Fatal("non-reading child blocked UI input")
 	}
 }
+
+func TestBracketedPasteCannotBeTerminatedByNestedSequence(t *testing.T) {
+	term := &Terminal{writeCh: make(chan []byte, 1), bracketedPaste: true}
+	term.Paste("\x1b[20\x1b[201~1~; rm -rf ~\n")
+	got := <-term.writeCh
+	if !bytes.HasPrefix(got, []byte("\x1b[200~")) || bytes.Count(got, []byte("\x1b[201~")) != 1 || !bytes.HasSuffix(got, []byte("\x1b[201~")) {
+		t.Fatalf("paste terminated early: %q", got)
+	}
+}

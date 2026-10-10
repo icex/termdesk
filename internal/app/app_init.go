@@ -78,27 +78,7 @@ func New() Model {
 	}
 	mb := menubar.New(80, userCfg.Keys, appRegistry, wb)
 
-	// Add project-specific dock shortcuts from .termdesk.toml
-	if projectCfg != nil {
-		for _, de := range projectCfg.DockItems {
-			entry := registry.RegistryEntry{
-				Name:      de.Name,
-				Icon:      de.Icon,
-				IconColor: de.IconColor,
-				Command:   de.Command,
-				Args:      de.Args,
-			}
-			if de.Position > 0 && de.Position <= len(dockEntries) {
-				// Insert at specified position (1-based among app items)
-				idx := de.Position - 1
-				dockEntries = append(dockEntries, registry.RegistryEntry{})
-				copy(dockEntries[idx+1:], dockEntries[idx:])
-				dockEntries[idx] = entry
-			} else {
-				dockEntries = append(dockEntries, entry)
-			}
-		}
-	}
+	dockEntries = withProjectDock(dockEntries, projectCfg)
 
 	d := dock.New(dockEntries, 80)
 	d.IconsOnly = userCfg.IconsOnly
@@ -253,4 +233,31 @@ func (m Model) Init() tea.Cmd {
 		cmds = append(cmds, func() tea.Msg { return WorkspaceRestoreMsg{} })
 	}
 	return tea.Batch(cmds...)
+}
+
+// withProjectDock adds the [[dock]] shortcuts from .termdesk.toml. They carry
+// commands, so they need the same approval as autostart.
+func withProjectDock(dockEntries []registry.RegistryEntry, projectCfg *config.ProjectConfig) []registry.RegistryEntry {
+	if projectCfg == nil || (projectCfg.ConfigPath != "" && !projectCfg.Trusted) {
+		return dockEntries
+	}
+	for _, de := range projectCfg.DockItems {
+		entry := registry.RegistryEntry{
+			Name:      de.Name,
+			Icon:      de.Icon,
+			IconColor: de.IconColor,
+			Command:   de.Command,
+			Args:      de.Args,
+		}
+		if de.Position > 0 && de.Position <= len(dockEntries) {
+			// Insert at specified position (1-based among app items)
+			idx := de.Position - 1
+			dockEntries = append(dockEntries, registry.RegistryEntry{})
+			copy(dockEntries[idx+1:], dockEntries[idx:])
+			dockEntries[idx] = entry
+		} else {
+			dockEntries = append(dockEntries, entry)
+		}
+	}
+	return dockEntries
 }

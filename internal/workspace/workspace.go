@@ -293,28 +293,17 @@ func LoadWorkspace(projectDir string) (*WorkspaceState, error) {
 		if os.IsNotExist(err) {
 			return nil, nil // no saved workspace
 		}
-		if info, e := os.Stat(path); e == nil && info.Size() > 10<<20 {
-			os.Remove(path)
-			return nil, fmt.Errorf("workspace file too large and has been removed")
-		}
-		return nil, err
-	}
-
-	// Check if file is corrupted (too large or contains invalid data)
-	if len(data) > 10*1024*1024 { // 10MB limit
-		// Corrupted - remove it
-		os.Remove(path)
-		return nil, fmt.Errorf("workspace file was corrupted (too large) and has been removed")
+		return nil, fmt.Errorf("read workspace %s: %w", path, err)
 	}
 
 	state := &WorkspaceState{SourcePath: path, Trusted: trust.IsTrustedData(path, data)}
 	parseWorkspace(state, string(data))
 
 	// Validate the parsed state
+	// Invalid files are left in place: this also runs on untrusted files in
+	// other projects (workspace picker), and the user may want to repair it.
 	if !isValidWorkspace(state) {
-		// Corrupted - remove it
-		os.Remove(path)
-		return nil, fmt.Errorf("workspace file was corrupted (invalid structure) and has been removed")
+		return nil, fmt.Errorf("workspace file %s is corrupted (invalid structure)", path)
 	}
 
 	return state, nil

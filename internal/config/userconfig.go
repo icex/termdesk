@@ -611,6 +611,13 @@ func SaveUserConfig(cfg UserConfig) error {
 // UpdateUserConfig preserves unrelated settings during concurrent updates.
 func UpdateUserConfig(update func(*UserConfig)) error {
 	return fileutil.WithLock(configPath(), func() error {
+		// LoadUserConfig falls back to defaults on any read error; writing
+		// that back would wipe the user's settings.
+		if f, err := os.Open(configPath()); err == nil {
+			f.Close()
+		} else if !os.IsNotExist(err) {
+			return err
+		}
 		cfg := LoadUserConfig()
 		update(&cfg)
 		return saveUserConfig(cfg)

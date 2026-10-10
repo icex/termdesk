@@ -167,6 +167,7 @@ func TestInitLevelOff(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
+	t.Setenv("TERMDESK_HOME", "")
 
 	Init(LevelOff)
 	t.Cleanup(Close)
@@ -196,6 +197,7 @@ func TestInitCreatesLogFile(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
+	t.Setenv("TERMDESK_HOME", "")
 
 	Init(LevelDebug)
 	t.Cleanup(Close)
@@ -232,6 +234,7 @@ func TestInitIdempotent(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
+	t.Setenv("TERMDESK_HOME", "")
 
 	Init(LevelInfo)
 	t.Cleanup(Close)
@@ -267,6 +270,7 @@ func TestInitWithDebugWritesHeader(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
+	t.Setenv("TERMDESK_HOME", "")
 
 	Init(LevelDebug)
 	t.Cleanup(Close)

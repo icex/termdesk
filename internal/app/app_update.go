@@ -579,7 +579,10 @@ func (m Model) handleUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if projectDir != "" {
 				workspacePath := workspace.GetWorkspacePath(projectDir)
 				m.activeWorkspacePath = workspacePath
-				if state, err := workspace.LoadWorkspace(projectDir); err == nil && state != nil && len(state.Windows) > 0 {
+				state, err := workspace.LoadWorkspace(projectDir)
+				if err != nil {
+					m.blockUnreadableWorkspace(workspacePath, err)
+				} else if state != nil && len(state.Windows) > 0 {
 					if m.restoreWorkspace(state, projectDir) {
 						m.notifications.Push(
 							"Workspace Restored",
@@ -628,7 +631,10 @@ func (m Model) handleUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !restored {
 				workspacePath := workspace.GetWorkspacePath("")
 				m.activeWorkspacePath = workspacePath
-				if state, err := workspace.LoadWorkspace(""); err == nil && state != nil && len(state.Windows) > 0 {
+				state, err := workspace.LoadWorkspace("")
+				if err != nil {
+					m.blockUnreadableWorkspace(workspacePath, err)
+				} else if state != nil && len(state.Windows) > 0 {
 					if m.restoreWorkspace(state, "") {
 						m.notifications.Push(
 							"Workspace Restored",

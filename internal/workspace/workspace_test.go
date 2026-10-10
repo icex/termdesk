@@ -598,9 +598,9 @@ focused_id = ""
 		t.Errorf("error should mention corruption, got: %v", err)
 	}
 
-	// File should have been removed.
-	if _, statErr := os.Stat(wsPath); statErr == nil {
-		t.Error("corrupted workspace file should have been removed")
+	// File must be left for the user to inspect or repair.
+	if _, statErr := os.Stat(wsPath); statErr != nil {
+		t.Error("corrupted workspace file should not be removed")
 	}
 }
 
@@ -622,13 +622,13 @@ func TestLoadWorkspaceCorruptedTooLarge(t *testing.T) {
 	if loaded != nil {
 		t.Error("expected nil state for oversized workspace")
 	}
-	if !strings.Contains(err.Error(), "too large") {
-		t.Errorf("error should mention 'too large', got: %v", err)
+	if !strings.Contains(err.Error(), wsPath) {
+		t.Errorf("error should name the file, got: %v", err)
 	}
 
-	// File should have been removed.
-	if _, statErr := os.Stat(wsPath); statErr == nil {
-		t.Error("oversized workspace file should have been removed")
+	// File must be left for the user to inspect or repair.
+	if _, statErr := os.Stat(wsPath); statErr != nil {
+		t.Error("oversized workspace file should not be removed")
 	}
 }
 

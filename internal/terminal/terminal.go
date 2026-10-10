@@ -2082,7 +2082,9 @@ func (t *Terminal) Paste(text string) {
 	protected := t.bracketedPaste
 	t.mu.Unlock()
 	if protected {
-		text = "\x1b[200~" + strings.ReplaceAll(text, "\x1b[201~", "") + "\x1b[201~"
+		// Strip every ESC rather than just the terminator: a single
+		// ReplaceAll can be defeated by nesting ("\x1b[20\x1b[201~1~").
+		text = "\x1b[200~" + strings.ReplaceAll(text, "\x1b", "") + "\x1b[201~"
 	}
 	t.WriteInput([]byte(text))
 }

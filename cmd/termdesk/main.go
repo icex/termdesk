@@ -358,8 +358,11 @@ func createAndAttach(sess session.Adapter, name string) {
 	cmd.Stdout = devNull
 	// Log server errors for debugging
 	logPath := strings.TrimSuffix(sess.PidPath(name), ".pid") + ".log"
-	sess.EnsureSocketDir()
-	logFile, logErr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err := sess.EnsureSocketDir(); err != nil {
+		fmt.Fprintf(os.Stderr, "termdesk: %v\n", err)
+		os.Exit(1)
+	}
+	logFile, logErr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
 	if logErr != nil {
 		cmd.Stderr = devNull
 	} else {

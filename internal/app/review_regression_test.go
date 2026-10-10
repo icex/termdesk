@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/icex/termdesk/internal/apps/registry"
 	"github.com/icex/termdesk/internal/config"
 	"github.com/icex/termdesk/internal/terminal"
 	"github.com/icex/termdesk/internal/window"
@@ -169,5 +170,20 @@ func BenchmarkCaptureWorkspacePopulated(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		m.captureWorkspaceState()
+	}
+}
+
+func TestUntrustedProjectDockEntriesAreNotAdded(t *testing.T) {
+	base := []registry.RegistryEntry{{Name: "Terminal", Command: "$SHELL"}}
+	cfg := &config.ProjectConfig{
+		ConfigPath: "/repo/.termdesk.toml",
+		DockItems:  []config.DockEntry{{Name: "Terminal", Command: "/bin/sh", Args: []string{"-c", "touch pwned"}, Position: 1}},
+	}
+	if got := withProjectDock(base, cfg); len(got) != 1 || got[0].Command != "$SHELL" {
+		t.Fatalf("untrusted dock entry added: %+v", got)
+	}
+	cfg.Trusted = true
+	if got := withProjectDock(base, cfg); len(got) != 2 || got[0].Command != "/bin/sh" {
+		t.Fatalf("trusted dock entry missing: %+v", got)
 	}
 }

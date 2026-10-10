@@ -113,7 +113,7 @@ type WorkspaceDiscoveryMsg struct {
 }
 
 // QuitSaveMsg is phase 2 of the quit flow: fires ~150ms after the user
-// confirms quit so that app-state signals (vim :mksession, SIGUSR1) have
+// confirms quit so that app-state requests (SIGUSR1) have
 // time to land before we snapshot the workspace.
 type QuitSaveMsg struct {
 	ProjectDir string
@@ -143,3 +143,5 @@ func tickCleanup() tea.Cmd {
 		return CleanupMsg{Time: t}
 	})
 }
+
+type WallpaperRestartMsg struct{}

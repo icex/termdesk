@@ -11,16 +11,17 @@ import (
 	"syscall"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
+	goterm "github.com/charmbracelet/x/term"
 	"github.com/creack/pty"
 	"github.com/icex/termdesk/internal/app"
 	"github.com/icex/termdesk/internal/config"
 	"github.com/icex/termdesk/internal/logging"
 	"github.com/icex/termdesk/internal/session"
 	"github.com/icex/termdesk/internal/terminal"
-
-	tea "charm.land/bubbletea/v2"
-	goterm "github.com/charmbracelet/x/term"
+	"github.com/icex/termdesk/internal/trust"
+	"github.com/icex/termdesk/internal/ttyprobe"
 )
 
 func main() {
@@ -56,6 +57,32 @@ func main() {
 				name = os.Args[2]
 			}
 			runServer(sess, name)
+			return
+		case "trust":
+			if len(os.Args) != 3 {
+				fmt.Fprintln(os.Stderr, "usage: termdesk trust PATH (project directory or configuration/workspace file)")
+				os.Exit(1)
+			}
+			paths := []string{os.Args[2]}
+			if info, err := os.Stat(paths[0]); err == nil && info.IsDir() {
+				paths = []string{filepath.Join(paths[0], ".termdesk.toml"), filepath.Join(paths[0], ".termdesk-workspace.toml")}
+			}
+			count := 0
+			for _, path := range paths {
+				if _, err := os.Stat(path); os.IsNotExist(err) {
+					continue
+				}
+				if err := trust.Record(path); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				fmt.Printf("Trusted commands in %s\n", path)
+				count++
+			}
+			if count == 0 {
+				fmt.Fprintln(os.Stderr, "no project configuration or workspace found")
+				os.Exit(1)
+			}
 			return
 		case "ls", "list":
 			listSessions(sess)
@@ -108,8 +135,9 @@ func main() {
 					os.Exit(1)
 				}
 				checkNesting()
+				os.Setenv("TERMDESK_PROJECT_DIR", absPath)
 				// Use directory name as session name so projects don't collide
-				name := filepath.Base(absPath)
+				name := session.ProjectSessionName(absPath)
 				createOrAttach(sess, name)
 				return
 			}
@@ -245,24 +273,7 @@ func probeEmojiWidth() {
 	// Save cursor, move to col 1, print test char, query position
 	os.Stdout.Write([]byte("\x1b7\x1b[1G☀\x1b[6n"))
 
-	// Read DSR response: \x1b[row;colR
-	var resp []byte
-	buf := make([]byte, 32)
-	deadline := time.Now().Add(100 * time.Millisecond)
-	os.Stdin.SetReadDeadline(deadline)
-	for time.Now().Before(deadline) {
-		n, err := os.Stdin.Read(buf)
-		if n > 0 {
-			resp = append(resp, buf[:n]...)
-			if bytes.ContainsRune(resp, 'R') {
-				break
-			}
-		}
-		if err != nil {
-			break
-		}
-	}
-	os.Stdin.SetReadDeadline(time.Time{})
+	resp := ttyprobe.ReadUntil(os.Stdin, 100*time.Millisecond, func(b []byte) bool { return bytes.ContainsRune(b, 'R') })
 
 	// Restore cursor and clear the test character
 	os.Stdout.Write([]byte("\x1b8\x1b[K"))
@@ -346,9 +357,12 @@ func createAndAttach(sess session.Adapter, name string) {
 	cmd.Stdin = devNull
 	cmd.Stdout = devNull
 	// Log server errors for debugging
-	logPath := sess.SocketDir() + "/" + name + ".log"
-	sess.EnsureSocketDir()
-	logFile, logErr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	logPath := strings.TrimSuffix(sess.PidPath(name), ".pid") + ".log"
+	if err := sess.EnsureSocketDir(); err != nil {
+		fmt.Fprintf(os.Stderr, "termdesk: %v\n", err)
+		os.Exit(1)
+	}
+	logFile, logErr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
 	if logErr != nil {
 		cmd.Stderr = devNull
 	} else {
@@ -442,6 +456,7 @@ Usage:
   termdesk keys         List keybindings
   termdesk keys --edit  Open keybindings config in $EDITOR
   termdesk kill NAME    Kill a session
+  termdesk trust PATH   Trust commands in inspected project/workspace files
   termdesk help         Show this help
 
 Options:

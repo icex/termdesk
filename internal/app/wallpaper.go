@@ -60,7 +60,7 @@ func (m *Model) launchWallpaperTerminal() {
 	if m.wallpaperProgram == "" {
 		return
 	}
-	if m.wallpaperLaunchFailures > 3 && time.Since(m.wallpaperLastLaunch) < 10*time.Second {
+	if time.Since(m.wallpaperLastLaunch) < time.Second || (m.wallpaperLaunchFailures > 3 && time.Since(m.wallpaperLastLaunch) < 10*time.Second) {
 		logging.Error("wallpaper program failing repeatedly, backing off")
 		return
 	}

@@ -2,6 +2,7 @@ package window
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/icex/termdesk/pkg/geometry"
@@ -22,10 +23,10 @@ const (
 // Leaf nodes have TermID set and nil Children.
 // Internal nodes have two children and a ratio.
 type SplitNode struct {
-	Dir      SplitDir       // meaningful only for internal nodes
-	Ratio    float64        // 0.0..1.0 — fraction of space for Children[0]
-	Children [2]*SplitNode  // [0]=left/top, [1]=right/bottom; nil for leaves
-	TermID   string         // terminal ID for leaf nodes (empty for internal)
+	Dir      SplitDir      // meaningful only for internal nodes
+	Ratio    float64       // 0.0..1.0 — fraction of space for Children[0]
+	Children [2]*SplitNode // [0]=left/top, [1]=right/bottom; nil for leaves
+	TermID   string        // terminal ID for leaf nodes (empty for internal)
 }
 
 // PaneRect maps a leaf terminal ID to its screen rectangle.
@@ -37,8 +38,8 @@ type PaneRect struct {
 // Separator describes a 1-cell divider line between two panes.
 type Separator struct {
 	Rect geometry.Rect
-	Dir  SplitDir    // direction of the split that created this separator
-	Node *SplitNode  // the internal node owning this separator
+	Dir  SplitDir   // direction of the split that created this separator
+	Node *SplitNode // the internal node owning this separator
 }
 
 // IsLeaf returns true if this node is a leaf (has a terminal, no children).
@@ -280,7 +281,31 @@ func DecodeSplitTree(s string) *SplitNode {
 		return nil
 	}
 	tokens := strings.Fields(s)
-	node, _ := decodeSplitNode(tokens, 0)
+	if len(tokens) > 127 {
+		return nil
+	}
+	node, end := decodeSplitNode(tokens, 0)
+	if end != len(tokens) {
+		return nil
+	}
+	seen := map[string]bool{}
+	var valid func(*SplitNode) bool
+	valid = func(n *SplitNode) bool {
+		if n == nil {
+			return false
+		}
+		if n.IsLeaf() {
+			if n.TermID == "" || seen[n.TermID] {
+				return false
+			}
+			seen[n.TermID] = true
+			return n.Children[1] == nil
+		}
+		return n.Ratio > 0 && n.Ratio < 1 && !math.IsNaN(n.Ratio) && valid(n.Children[0]) && valid(n.Children[1])
+	}
+	if !valid(node) {
+		return nil
+	}
 	return node
 }
 
@@ -312,4 +337,14 @@ func decodeSplitNode(tokens []string, idx int) (*SplitNode, int) {
 		}, nextIdx2
 	}
 	return nil, idx + 1
+}
+
+// Clone returns an independent tree, preserving divider ratios exactly.
+func (n *SplitNode) Clone() *SplitNode {
+	if n == nil {
+		return nil
+	}
+	copy := *n
+	copy.Children = [2]*SplitNode{n.Children[0].Clone(), n.Children[1].Clone()}
+	return &copy
 }

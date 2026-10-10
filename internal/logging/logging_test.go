@@ -167,6 +167,7 @@ func TestInitLevelOff(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
+	t.Setenv("TERMDESK_HOME", "")
 
 	Init(LevelOff)
 	t.Cleanup(Close)
@@ -196,6 +197,7 @@ func TestInitCreatesLogFile(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
+	t.Setenv("TERMDESK_HOME", "")
 
 	Init(LevelDebug)
 	t.Cleanup(Close)
@@ -232,6 +234,7 @@ func TestInitIdempotent(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
+	t.Setenv("TERMDESK_HOME", "")
 
 	Init(LevelInfo)
 	t.Cleanup(Close)
@@ -267,6 +270,7 @@ func TestInitWithDebugWritesHeader(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
+	t.Setenv("TERMDESK_HOME", "")
 
 	Init(LevelDebug)
 	t.Cleanup(Close)
@@ -328,4 +332,39 @@ func TestLogWithNilFile(t *testing.T) {
 	Info("test %s", "info")
 	Warn("test %s", "warn")
 	Error("test %s", "error")
+}
+
+func TestLogRejectsSymlinkAndKeepsPrivateBoundedOutput(t *testing.T) {
+	resetGlobals()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("TERMDESK_HOME", "")
+	dir := filepath.Join(home, ".local", "share", "termdesk")
+	os.MkdirAll(dir, 0700)
+	victim := filepath.Join(home, "victim")
+	os.WriteFile(victim, []byte("keep"), 0600)
+	path := filepath.Join(dir, "termdesk.log")
+	os.Symlink(victim, path)
+	Init(LevelDebug)
+	Debug("should not reach victim")
+	Close()
+	data, _ := os.ReadFile(victim)
+	if string(data) != "keep" {
+		t.Fatal("log followed symlink")
+	}
+	os.Remove(path)
+	resetGlobals()
+	Init(LevelDebug)
+	t.Cleanup(Close)
+	message := strings.Repeat("x", 32<<10)
+	for i := 0; i < 200; i++ {
+		Debug("%s", message)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&077 != 0 || info.Size() > (2<<20)+(20<<10) {
+		t.Fatal("log is public or unbounded")
+	}
 }

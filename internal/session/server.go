@@ -15,6 +15,7 @@ import (
 
 	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
+	"github.com/icex/termdesk/internal/fileutil"
 )
 
 // detachOSC is the OSC sequence the app writes to trigger detach.
@@ -65,6 +66,21 @@ type ServerOptions struct {
 
 // NewServer creates and starts a new server for the named session.
 func NewServer(name string, cols, rows int, opts ServerOptions) (*Server, error) {
+	if err := EnsureSocketDir(); err != nil {
+		return nil, fmt.Errorf("cannot create socket dir: %w", err)
+	}
+	var s *Server
+	err := fileutil.WithLock(SocketPath(name), func() error {
+		if pid := readPid(PidPath(name)); pid > 0 && processAlive(pid) && socketPresent(SocketPath(name)) {
+			return fmt.Errorf("session %q already exists", name)
+		}
+		var err error
+		s, err = newServer(name, cols, rows, opts)
+		return err
+	})
+	return s, err
+}
+func newServer(name string, cols, rows int, opts ServerOptions) (*Server, error) {
 	if err := EnsureSocketDir(); err != nil {
 		return nil, fmt.Errorf("cannot create socket dir: %w", err)
 	}
@@ -197,6 +213,7 @@ func (s *Server) Run() error {
 // readPtyLoop reads from the master PTY, feeds to emulator, and forwards to client.
 func (s *Server) readPtyLoop() {
 	buf := make([]byte, 32768)
+	var detachPending []byte
 	// Emulator runs in a separate goroutine to keep it off the critical output path.
 	emuCh := make(chan []byte, 64)
 	go func() {
@@ -211,12 +228,8 @@ func (s *Server) readPtyLoop() {
 		if n > 0 {
 			data := buf[:n]
 
-			// Check for OSC detach sequence from the app
-			detach := false
-			if bytes.Contains(data, detachOSC) {
-				detach = true
-				data = bytes.ReplaceAll(data, detachOSC, nil)
-			}
+			// PTY reads may split the detach OSC at any byte boundary.
+			data, detach := extractDetach(data, &detachPending)
 
 			// Feed copy to emulator goroutine (async, non-blocking best-effort)
 			if len(data) > 0 {
@@ -317,6 +330,9 @@ func (s *Server) handleClient(conn net.Conn) {
 		case MsgResize:
 			if len(payload) == 4 {
 				rows, cols := DecodeResize(payload)
+				if rows < 1 || cols < 1 || rows > 4096 || cols > 4096 || int(rows)*int(cols) > 1<<20 {
+					continue
+				}
 				s.ptyMu.Lock()
 				pty.Setsize(s.ptmx, &pty.Winsize{
 					Rows: rows,
@@ -513,4 +529,25 @@ func BuildAppEnv() []string {
 		env = append(env, "TERMDESK_SIXEL=1")
 	}
 	return env
+}
+
+// extractDetach removes complete control markers and retains only a possible
+// marker prefix at the end of a read. Ordinary frame bytes flow immediately.
+func extractDetach(data []byte, pending *[]byte) ([]byte, bool) {
+	if len(*pending) > 0 {
+		data = append(*pending, data...)
+		*pending = nil
+	}
+	found := bytes.Contains(data, detachOSC)
+	if found {
+		data = bytes.ReplaceAll(data, detachOSC, nil)
+	}
+	for n := min(len(data), len(detachOSC)-1); n > 0; n-- {
+		if bytes.Equal(data[len(data)-n:], detachOSC[:n]) {
+			*pending = append([]byte(nil), data[len(data)-n:]...)
+			data = data[:len(data)-n]
+			break
+		}
+	}
+	return data, found
 }

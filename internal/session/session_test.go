@@ -36,7 +36,7 @@ func TestSocketDirTMPDIR(t *testing.T) {
 	t.Setenv("PREFIX", "")
 
 	dir := SocketDir()
-	want := filepath.Join(tmp, "termdesk")
+	want := filepath.Join(tmp, fmt.Sprintf("termdesk-%d", os.Getuid()))
 	if dir != want {
 		t.Fatalf("SocketDir=%q want %q", dir, want)
 	}

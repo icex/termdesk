@@ -790,48 +790,21 @@ func TestGetOrAllocateHostID(t *testing.T) {
 	}
 }
 
-func TestReadKittyFileMediumRegularFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "image.png")
-	content := []byte("fake-png-data")
-	os.WriteFile(path, content, 0644)
-
-	data, err := readKittyFileMedium(KittyMediumFile, path)
-	if err != nil {
-		t.Fatalf("readKittyFileMedium: %v", err)
-	}
-	if !bytes.Equal(data, content) {
-		t.Errorf("expected %q, got %q", content, data)
-	}
-	// Regular file should NOT be deleted
-	if _, err := os.Stat(path); err != nil {
-		t.Error("regular file should not be deleted after read")
-	}
-}
-
-func TestReadKittyFileMediumTempFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "temp.png")
-	content := []byte("temp-data")
-	os.WriteFile(path, content, 0644)
-
-	data, err := readKittyFileMedium(KittyMediumTempFile, path)
-	if err != nil {
-		t.Fatalf("readKittyFileMedium: %v", err)
-	}
-	if !bytes.Equal(data, content) {
-		t.Errorf("expected %q, got %q", content, data)
-	}
-	// Temp file should be deleted after read
-	if _, err := os.Stat(path); err == nil {
-		t.Error("temp file should be deleted after read")
-	}
-}
-
-func TestReadKittyFileMediumMissing(t *testing.T) {
-	_, err := readKittyFileMedium(KittyMediumFile, "/nonexistent/path")
-	if err == nil {
-		t.Error("expected error for missing file")
+func TestFilesystemGraphicsTransportCannotAccessLocalPaths(t *testing.T) {
+	for _, medium := range []KittyGraphicsMedium{KittyMediumFile, KittyMediumTempFile, KittyMediumSharedMemory} {
+		kp := newTestKP()
+		path := filepath.Join(t.TempDir(), "ordinary-file")
+		os.WriteFile(path, []byte("private marker"), 0600)
+		var reply []byte
+		cmd := &KittyCommand{Action: KittyActionTransmitPlace, Medium: medium, FilePath: path, Format: KittyFormatPNG}
+		result := kp.ForwardCommand(cmd, nil, "w", 0, 0, 80, 24, 1, 1, 0, 0, 0, false, func(b []byte) { reply = b })
+		if result != nil || !bytes.Contains(reply, []byte("ENOTSUPPORTED")) || len(kp.FlushPending()) != 0 {
+			t.Fatalf("medium %c accepted", medium)
+		}
+		after, err := os.ReadFile(path)
+		if err != nil || string(after) != "private marker" {
+			t.Fatal("ordinary file modified")
+		}
 	}
 }
 

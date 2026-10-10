@@ -4,10 +4,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/icex/termdesk/internal/fileutil"
+	"github.com/icex/termdesk/internal/trust"
 )
 
 // ProjectConfig represents a .termdesk.toml project configuration.
 type ProjectConfig struct {
+	Trusted    bool            // trust evaluated against the exact parsed bytes
+	ConfigPath string          // file discovered on disk; empty for explicit in-memory config
 	ProjectDir string          // absolute path where .termdesk.toml was found
 	AutoStart  []AutoStartItem // commands to auto-start
 	DockItems  []DockEntry     // custom dock shortcuts
@@ -59,13 +64,15 @@ func FindProjectConfig(startDir string) (*ProjectConfig, error) {
 		configPath := filepath.Join(dir, ".termdesk.toml")
 		if _, err := os.Stat(configPath); err == nil {
 			// Found it!
-			data, err := os.ReadFile(configPath)
+			data, err := fileutil.ReadBounded(configPath, 1<<20)
 			if err != nil {
 				return nil, err
 			}
 
 			config := &ProjectConfig{
 				ProjectDir: dir,
+				ConfigPath: configPath,
+				Trusted:    trust.IsTrustedData(configPath, data),
 			}
 			parseProjectConfig(config, string(data))
 			return config, nil

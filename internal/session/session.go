@@ -1,14 +1,15 @@
 package session
 
 import (
+	"crypto/sha256"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // DefaultSession is the name used when no session name is specified.
@@ -20,7 +21,7 @@ func SocketDir() string {
 		return filepath.Join(dir, "termdesk")
 	}
 	if dir := os.Getenv("TMPDIR"); dir != "" {
-		return filepath.Join(dir, "termdesk")
+		return filepath.Join(dir, fmt.Sprintf("termdesk-%d", os.Getuid()))
 	}
 	if dir := os.Getenv("PREFIX"); dir != "" {
 		return filepath.Join(dir, "var", "run", "termdesk")
@@ -62,7 +63,28 @@ func PidPath(name string) string {
 
 // EnsureSocketDir creates the socket directory with 0700 permissions.
 func EnsureSocketDir() error {
-	return os.MkdirAll(SocketDir(), 0o700)
+	dir := SocketDir()
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	return validateSocketDir()
+}
+
+func validateSocketDir() error {
+	dir := SocketDir()
+	fd, err := unix.Open(dir, unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_RDONLY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return err
+	}
+	if st.Uid != uint32(os.Getuid()) || st.Mode&077 != 0 {
+		return fmt.Errorf("session directory must be owned by you and private (0700): %s", dir)
+	}
+	return nil
 }
 
 // SessionInfo holds information about an active session.
@@ -83,6 +105,9 @@ func ListSessions() ([]SessionInfo, error) {
 		return nil, err
 	}
 
+	if err := validateSocketDir(); err != nil {
+		return nil, err
+	}
 	var sessions []SessionInfo
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".sock") {
@@ -99,7 +124,7 @@ func ListSessions() ([]SessionInfo, error) {
 			continue
 		}
 
-		if !socketAlive(sockPath) {
+		if pid <= 0 || !socketPresent(sockPath) {
 			os.Remove(sockPath)
 			os.Remove(pidPath)
 			continue
@@ -116,10 +141,13 @@ func ListSessions() ([]SessionInfo, error) {
 
 // SessionExists checks if a named session is running.
 func SessionExists(name string) bool {
+	if validateSocketDir() != nil {
+		return false
+	}
 	sockPath := SocketPath(name)
 	pidPath := PidPath(name)
 	pid := readPid(pidPath)
-	if pid > 0 && processAlive(pid) && socketAlive(sockPath) {
+	if pid > 0 && processAlive(pid) && socketPresent(sockPath) {
 		return true
 	}
 	// Clean up stale files
@@ -144,11 +172,21 @@ func processAlive(pid int) bool {
 	return syscall.Kill(pid, 0) == nil
 }
 
-func socketAlive(path string) bool {
-	conn, err := net.DialTimeout("unix", path, 500*time.Millisecond)
-	if err != nil {
-		return false
+func socketAlive(path string) bool { return socketPresent(path) }
+
+// ProjectSessionName includes the canonical path so equal basenames do not collide.
+func ProjectSessionName(path string) string {
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		path = real
 	}
-	conn.Close()
-	return true
+	sum := sha256.Sum256([]byte(path))
+	base := sanitizeSessionName(filepath.Base(path))
+	if len(base) > 32 {
+		base = base[:32]
+	}
+	return fmt.Sprintf("%s-%x", base, sum[:6])
+}
+func socketPresent(path string) bool {
+	st, err := os.Lstat(path)
+	return err == nil && st.Mode()&os.ModeSocket != 0
 }

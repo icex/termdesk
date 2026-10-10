@@ -23,7 +23,7 @@ heading() { printf "\n${BOLD}${CYAN}%s${RESET}\n" "$*"; }
 # -- globals ----------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MIN_GO_MAJOR=1
-MIN_GO_MINOR=23
+MIN_GO_MINOR=25
 GO_CMD=""
 OS=""       # linux, macos, termux
 PKG_MGR=""  # apt, brew, pkg, dnf, pacman
@@ -94,8 +94,8 @@ check_go() {
                 echo "    Download from https://go.dev/dl/"
                 echo ""
                 echo "    Quick install:"
-                echo "      wget https://go.dev/dl/go1.23.6.linux-amd64.tar.gz"
-                echo "      sudo tar -C /usr/local -xzf go1.23.6.linux-amd64.tar.gz"
+                echo "      wget https://go.dev/dl/go1.25.6.linux-amd64.tar.gz"
+                echo "      sudo tar -C /usr/local -xzf go1.25.6.linux-amd64.tar.gz"
                 echo "      export PATH=/usr/local/go/bin:\$PATH";;
         esac
         echo ""

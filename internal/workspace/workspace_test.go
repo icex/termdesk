@@ -137,7 +137,7 @@ func TestBufferFileRoundTrip(t *testing.T) {
 		t.Fatal("SaveBuffer returned empty id")
 	}
 	defer func() {
-		CleanupBuffers(map[string]bool{}) // remove test file
+		CleanupBuffers(GetWorkspacePath(""), map[string]bool{}) // remove test file
 	}()
 
 	// Load it back.
@@ -206,7 +206,7 @@ buffer_rows = 24
 buffer_cols = 80
 `
 	defer func() {
-		CleanupBuffers(map[string]bool{}) // remove test file
+		CleanupBuffers(GetWorkspacePath(""), map[string]bool{}) // remove test file
 	}()
 
 	var parsed WorkspaceState
@@ -321,7 +321,7 @@ func TestSaveLoadWorkspace(t *testing.T) {
 		Windows: []WindowState{
 			{
 				ID: "win-1", Title: "Test", Command: "go",
-				Args: []string{"test", "./..."},
+				Args:    []string{"test", "./..."},
 				WorkDir: dir, X: 5, Y: 5, Width: 80, Height: 24,
 			},
 		},
@@ -459,8 +459,8 @@ func TestCleanupBuffersWithMixedFiles(t *testing.T) {
 	os.MkdirAll(dir, 0755)
 
 	// Create buffer files: one active, one stale.
-	activeID := "cleanup-test-active"
-	staleID := "cleanup-test-stale"
+	activeID := bufferPrefix(GetWorkspacePath("")) + "cleanup-test-active"
+	staleID := bufferPrefix(GetWorkspacePath("")) + "cleanup-test-stale"
 
 	SaveBuffer(activeID, "active content")
 	SaveBuffer(staleID, "stale content")
@@ -480,7 +480,7 @@ func TestCleanupBuffersWithMixedFiles(t *testing.T) {
 	defer os.RemoveAll(subdir)
 
 	// Cleanup keeping only the active buffer.
-	CleanupBuffers(map[string]bool{activeID: true})
+	CleanupBuffers(GetWorkspacePath(""), map[string]bool{activeID: true})
 
 	// Active buffer should still exist.
 	if LoadBuffer(activeID) == "" {
@@ -502,8 +502,8 @@ func TestCleanupBuffersWithMixedFiles(t *testing.T) {
 
 func TestCleanupBuffersEmptyDir(t *testing.T) {
 	// CleanupBuffers should not panic when called with nil or empty map.
-	CleanupBuffers(nil)
-	CleanupBuffers(map[string]bool{})
+	CleanupBuffers(GetWorkspacePath(""), nil)
+	CleanupBuffers(GetWorkspacePath(""), map[string]bool{})
 }
 
 func TestGetWorkspacePathGlobal(t *testing.T) {
@@ -598,9 +598,9 @@ focused_id = ""
 		t.Errorf("error should mention corruption, got: %v", err)
 	}
 
-	// File should have been removed.
-	if _, statErr := os.Stat(wsPath); statErr == nil {
-		t.Error("corrupted workspace file should have been removed")
+	// File must be left for the user to inspect or repair.
+	if _, statErr := os.Stat(wsPath); statErr != nil {
+		t.Error("corrupted workspace file should not be removed")
 	}
 }
 
@@ -622,13 +622,13 @@ func TestLoadWorkspaceCorruptedTooLarge(t *testing.T) {
 	if loaded != nil {
 		t.Error("expected nil state for oversized workspace")
 	}
-	if !strings.Contains(err.Error(), "too large") {
-		t.Errorf("error should mention 'too large', got: %v", err)
+	if !strings.Contains(err.Error(), wsPath) {
+		t.Errorf("error should name the file, got: %v", err)
 	}
 
-	// File should have been removed.
-	if _, statErr := os.Stat(wsPath); statErr == nil {
-		t.Error("oversized workspace file should have been removed")
+	// File must be left for the user to inspect or repair.
+	if _, statErr := os.Stat(wsPath); statErr != nil {
+		t.Error("oversized workspace file should not be removed")
 	}
 }
 

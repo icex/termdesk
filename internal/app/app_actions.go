@@ -87,10 +87,10 @@ var terminalStayActions = map[string]bool{
 }
 
 func (m *Model) persistTilingSettings() {
-	cfg := config.LoadUserConfig()
-	cfg.TilingMode = m.tilingMode
-	cfg.TilingLayout = normalizeTilingLayout(m.tilingLayout)
-	if err := config.SaveUserConfig(cfg); err != nil {
+	if err := config.UpdateUserConfig(func(cfg *config.UserConfig) {
+		cfg.TilingMode = m.tilingMode
+		cfg.TilingLayout = normalizeTilingLayout(m.tilingLayout)
+	}); err != nil {
 		logging.Error("config save failed: %v", err)
 	}
 }
@@ -572,10 +572,7 @@ func (m Model) confirmAccept() (tea.Model, tea.Cmd) {
 		// 1. signal apps now (fast), dismiss dialog
 		// 2. tea.Tick 150ms → QuitSaveMsg (gives vim/apps time to respond)
 		// 3. QuitSaveMsg → async SaveWorkspace → QuitFinalizeMsg → close + quit
-		projectDir := ""
-		if m.projectConfig != nil {
-			projectDir = m.projectConfig.ProjectDir
-		}
+		projectDir := m.workspaceProjectDir()
 		m.signalAppsForCapture()
 		m.confirmClose = nil
 		return m, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
@@ -830,7 +827,7 @@ func (m Model) executeMenuAction(action string) (tea.Model, tea.Cmd) {
 		text := m.clipboard.Paste()
 		if text != "" {
 			if _, term := m.focusedTerminal(); term != nil {
-				term.WriteInput([]byte(text))
+				term.Paste(text)
 			}
 		}
 		m.inputMode = ModeTerminal
@@ -841,9 +838,7 @@ func (m Model) executeMenuAction(action string) (tea.Model, tea.Cmd) {
 		if !m.showKeys {
 			m.showKeysEvents = nil
 		}
-		cfg := config.LoadUserConfig()
-		cfg.ShowKeys = m.showKeys
-		if err := config.SaveUserConfig(cfg); err != nil {
+		if err := config.UpdateUserConfig(func(cfg *config.UserConfig) { cfg.ShowKeys = m.showKeys }); err != nil {
 			logging.Error("config save failed: %v", err)
 		}
 	case "quake_terminal":
@@ -1004,7 +999,14 @@ func (m *Model) applySettings() {
 		m.launchWallpaperTerminal()
 	}
 
-	if err := config.SaveUserConfig(cfg); err != nil {
+	if err := config.UpdateUserConfig(func(latest *config.UserConfig) {
+		// Settings owns the options above; background history updates own these fields.
+		cfg.RecentApps = latest.RecentApps
+		cfg.Favorites = latest.Favorites
+		cfg.RecentWorkspaces = latest.RecentWorkspaces
+		cfg.TourCompleted = latest.TourCompleted
+		*latest = cfg
+	}); err != nil {
 		logging.Error("config save failed: %v", err)
 	}
 	m.updateDockReserved()

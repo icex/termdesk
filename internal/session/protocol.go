@@ -21,11 +21,17 @@ const MaxPayload = 1 << 20
 // WriteMsg writes a TLV message: type(1) + length(4 BE) + payload.
 // Header and payload are combined into a single write to minimize syscalls.
 func WriteMsg(w io.Writer, typ byte, payload []byte) error {
+	if len(payload) > MaxPayload {
+		return fmt.Errorf("message too large: %d bytes", len(payload))
+	}
 	buf := make([]byte, 5+len(payload))
 	buf[0] = typ
 	binary.BigEndian.PutUint32(buf[1:5], uint32(len(payload)))
 	copy(buf[5:], payload)
-	_, err := w.Write(buf)
+	n, err := w.Write(buf)
+	if err == nil && n != len(buf) {
+		return io.ErrShortWrite
+	}
 	return err
 }
 

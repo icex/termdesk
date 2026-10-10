@@ -1,13 +1,18 @@
 package app
 
 import (
+	"flag"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/icex/termdesk/internal/apps/registry"
 	"github.com/icex/termdesk/internal/contextmenu"
+	"github.com/icex/termdesk/internal/dock"
+	"github.com/icex/termdesk/internal/launcher"
+	"github.com/icex/termdesk/internal/menubar"
 	"github.com/icex/termdesk/internal/notification"
 	"github.com/icex/termdesk/internal/terminal"
 	"github.com/icex/termdesk/internal/window"
@@ -66,15 +71,23 @@ func withTestConfig(t *testing.T) string {
 	return cfgPath
 }
 
+var updateGoldens = flag.Bool("update", false, "regenerate golden render fixtures")
+
 func assertGolden(t *testing.T, name, got string) {
 	t.Helper()
 	path := goldenPath(name)
-	// Always update goldens per project policy.
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		t.Fatalf("mkdir: %v", err)
+	if *updateGoldens {
+		if err := os.WriteFile(path, []byte(got), 0644); err != nil {
+			t.Fatal(err)
+		}
+		return
 	}
-	if err := os.WriteFile(path, []byte(got), 0644); err != nil {
-		t.Fatalf("write golden: %v", err)
+	expected, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(expected) != got {
+		t.Errorf("render differs from %s; inspect changes and regenerate with -update\n got:\n%s", path, got)
 	}
 }
 
@@ -83,6 +96,12 @@ func newGoldenModel(t *testing.T) Model {
 	_ = withTestConfig(t)
 
 	m := New()
+	// Golden output must not depend on installed programs or PATH order.
+	m.registry = []registry.RegistryEntry{{Name: "Terminal", Icon: "\uf120", Command: "$SHELL"}, {Name: "Files", Icon: "\uf07b", Command: "yazi"}, {Name: "Browser", Icon: "\uf0ac", Command: "carbonyl"}, {Name: "nvim", Icon: "\ue62b", Command: "nvim"}, {Name: "System Monitor", Icon: "\uf200", Command: "htop"}}
+	m.dock = dock.New(registry.DockEntries(m.registry), 80)
+	m.launcher = launcher.New(m.registry)
+	m.launcher.SetExecIndex([]string{"termdesk-calc", "termdesk-snake"})
+	m.menuBar = menubar.New(80, m.keybindings, m.registry, nil)
 	m.tour.Skip()
 	m.ready = true
 	m.width = 80

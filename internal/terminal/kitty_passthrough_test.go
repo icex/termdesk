@@ -809,17 +809,24 @@ func TestFilesystemGraphicsTransportCannotAccessLocalPaths(t *testing.T) {
 }
 
 func TestHostTermProgram(t *testing.T) {
-	orig := os.Getenv("TERM_PROGRAM")
-	defer os.Setenv("TERM_PROGRAM", orig)
+	// Clear the termdesk override too — it wins over TERM_PROGRAM and is set
+	// when the suite runs inside a termdesk session.
+	t.Setenv("TERMDESK_HOST_TERM_PROGRAM", "")
 
-	os.Setenv("TERM_PROGRAM", "WezTerm")
+	t.Setenv("TERM_PROGRAM", "WezTerm")
 	if got := HostTermProgram(); got != "WezTerm" {
 		t.Errorf("expected WezTerm, got %q", got)
 	}
 
-	os.Unsetenv("TERM_PROGRAM")
+	t.Setenv("TERM_PROGRAM", "")
 	if got := HostTermProgram(); got != "" {
 		t.Errorf("expected empty, got %q", got)
+	}
+
+	t.Setenv("TERM_PROGRAM", "tmux")
+	t.Setenv("TERMDESK_HOST_TERM_PROGRAM", "ghostty")
+	if got := HostTermProgram(); got != "ghostty" {
+		t.Errorf("expected override ghostty, got %q", got)
 	}
 }
 

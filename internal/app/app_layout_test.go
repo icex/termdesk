@@ -211,6 +211,24 @@ func TestUpdateDockRunningLabelTruncation(t *testing.T) {
 	t.Error("expected to find dock item for long-titled window")
 }
 
+func TestFitDockLabel(t *testing.T) {
+	tests := []struct {
+		title string
+		w     int
+		want  string
+	}{
+		{"bash", 8, "  bash  "},
+		{"vim", 8, "  vim   "},
+		{"exactly8", 8, "exactly8"},
+		{"much too long", 8, "much to…"},
+	}
+	for _, tt := range tests {
+		if got := fitDockLabel(tt.title, tt.w); got != tt.want {
+			t.Errorf("fitDockLabel(%q, %d) = %q, want %q", tt.title, tt.w, got, tt.want)
+		}
+	}
+}
+
 func TestUpdateDockRunningUniformLabelWidth(t *testing.T) {
 	m := setupReadyModel()
 	m.width = 200

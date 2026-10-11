@@ -553,13 +553,14 @@ const (
 	dockLabelMinWidth = 4
 )
 
-// fitDockLabel truncates (with an ellipsis) or right-pads title to exactly w runes.
+// fitDockLabel truncates (with an ellipsis) or centers title in exactly w runes.
 func fitDockLabel(title string, w int) string {
 	r := []rune(title)
 	if len(r) > w {
 		return string(r[:w-1]) + "…"
 	}
-	return title + strings.Repeat(" ", w-len(r))
+	pad := w - len(r)
+	return strings.Repeat(" ", pad/2) + title + strings.Repeat(" ", pad-pad/2)
 }
 
 // findWindow returns the window with the given ID from the list, or nil.

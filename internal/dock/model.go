@@ -1,6 +1,11 @@
 package dock
 
-import "github.com/icex/termdesk/internal/apps/registry"
+import (
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/icex/termdesk/internal/apps/registry"
+)
 
 // DockItem represents a launchable app in the dock.
 type DockItem struct {
@@ -23,6 +28,21 @@ func (d DockItem) TooltipText() string {
 		return d.FullTitle
 	}
 	return d.Label
+}
+
+// HasStatusSlot reports whether the item always reserves 2 cells for the
+// bell/activity prefix. Window entries do, so their width stays constant as
+// those flags toggle on focus changes.
+func (d DockItem) HasStatusSlot() bool {
+	return d.Special == "minimized" || d.Special == "running"
+}
+
+// HasOwnIndicator reports whether the window title already starts with a
+// status glyph — Claude Code's "✳", Codex/CLI braille spinners, Nerd Font
+// icons — so the dock shouldn't stack its generic activity spinner on top.
+func (d DockItem) HasOwnIndicator() bool {
+	r, _ := utf8.DecodeRuneInString(d.TooltipText())
+	return r > unicode.MaxASCII && (unicode.Is(unicode.So, r) || unicode.Is(unicode.Co, r))
 }
 
 // DockCell represents a single cell in the dock render output with styling info.

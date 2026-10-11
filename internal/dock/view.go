@@ -193,8 +193,12 @@ func (d *Dock) renderItems() string {
 		label := item.Label
 		if item.HasBell {
 			label = "\U000F0027 " + label // 󰀧 bell icon prefix
-		} else if item.HasActivity {
+		} else if item.HasActivity && !item.HasOwnIndicator() {
 			label = string(spinner) + " " + label
+		} else if item.HasStatusSlot() {
+			// Keep the status slot's width when idle so the dock doesn't
+			// re-center (and jitter) as focus moves activity between windows.
+			label = " " + label + " "
 		}
 		if item.Icon == "" {
 			sb.WriteString(" " + label + " ")
@@ -268,11 +272,10 @@ func (d *Dock) itemWidth(idx int) int {
 		return 0
 	}
 	item := d.Items[idx]
-	// Bell prefix: "󰀧 " (2 chars), Activity prefix: "⠋ " (2 chars)
+	// Bell prefix: "󰀧 " (2 chars), Activity prefix: "◐ " (2 chars).
+	// Window items always reserve the slot; see HasStatusSlot.
 	extra := 0
-	if item.HasBell {
-		extra = 2
-	} else if item.HasActivity {
+	if item.HasBell || item.HasActivity || item.HasStatusSlot() {
 		extra = 2
 	}
 	if item.Icon == "" {

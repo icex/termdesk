@@ -1,11 +1,13 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"sort"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/icex/termdesk/internal/config"
@@ -200,14 +202,48 @@ func TestUpdateDockRunningLabelTruncation(t *testing.T) {
 	for _, item := range m.dock.Items {
 		if item.WindowID == id {
 			labelRunes := []rune(item.Label)
-			// Progressive truncation: first level is 12 chars max (then 8, 4, 1)
-			if len(labelRunes) > 12 {
-				t.Errorf("label should be truncated to 12 chars max, got %d: %q", len(labelRunes), item.Label)
+			if len(labelRunes) != dockLabelMaxWidth || labelRunes[len(labelRunes)-1] != '…' {
+				t.Errorf("label = %q, want %d runes ending in …", item.Label, dockLabelMaxWidth)
 			}
 			return
 		}
 	}
 	t.Error("expected to find dock item for long-titled window")
+}
+
+func TestUpdateDockRunningUniformLabelWidth(t *testing.T) {
+	m := setupReadyModel()
+	m.width = 200
+	m.dock.SetWidth(200)
+	titles := []string{"a", "bash", "This Is A Very Long Window Title"}
+	for i, title := range titles {
+		m.wm.AddWindow(window.NewWindow(fmt.Sprintf("w%d", i), title,
+			geometry.Rect{X: 0, Y: 1, Width: 80, Height: 24}, nil))
+	}
+
+	widths := func() map[int]bool {
+		m.updateDockRunning()
+		seen := map[int]bool{}
+		for _, item := range m.dock.Items {
+			if item.WindowID != "" {
+				seen[utf8.RuneCountInString(item.Label)] = true
+			}
+		}
+		return seen
+	}
+
+	got := widths()
+	if len(got) != 1 || !got[dockLabelMaxWidth] {
+		t.Fatalf("label widths = %v, want all %d", got, dockLabelMaxWidth)
+	}
+
+	// Narrow dock: all labels shrink together.
+	m.width = 80
+	m.dock.SetWidth(80)
+	got = widths()
+	if len(got) != 1 || got[dockLabelMaxWidth] {
+		t.Fatalf("narrow label widths = %v, want one width below %d", got, dockLabelMaxWidth)
+	}
 }
 
 func TestUpdateDockRunningPreservesOrder(t *testing.T) {

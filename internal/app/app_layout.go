@@ -502,6 +502,9 @@ func (m *Model) updateDockRunning() {
 			if item.Icon == "" {
 				// " label " + separator
 				w += utf8.RuneCountInString(item.Label) + 2 + sep
+				if item.HasStatusSlot() {
+					w += 2 // reserved bell/activity slot
+				}
 			} else if m.dock.IconsOnly {
 				// " icon  " = runeCount + 3 + separator (0)
 				w += utf8.RuneCountInString(item.Icon) + 3 + sep
@@ -512,31 +515,23 @@ func (m *Model) updateDockRunning() {
 		}
 		return w
 	}
-	truncateDynTo := func(maxChars int) {
-		for i, item := range dynItems {
-			titleRunes := []rune(item.Label)
-			if len(titleRunes) > maxChars {
-				dynItems[i].Label = string(titleRunes[:maxChars])
-			}
-		}
-	}
 
-	totalW := dockItemWidth(baseItems) + dockItemWidth(dynItems)
-	if totalW > m.width-4 && len(dynItems) > 0 {
-		truncateDynTo(12)
-		totalW = dockItemWidth(baseItems) + dockItemWidth(dynItems)
-	}
-	if totalW > m.width-4 && len(dynItems) > 0 {
-		truncateDynTo(8)
-		totalW = dockItemWidth(baseItems) + dockItemWidth(dynItems)
-	}
-	if totalW > m.width-4 && len(dynItems) > 0 {
-		truncateDynTo(4)
-		totalW = dockItemWidth(baseItems) + dockItemWidth(dynItems)
-		if totalW > m.width-4 {
-			for i := range dynItems {
-				_, shortLabel := minimizedDockLabel(windowItems[i])
-				dynItems[i].Label = shortLabel
+	// Every window entry gets the same label width so the dock layout doesn't
+	// shift as titles change. Shrink that width uniformly only when the dock
+	// runs out of room; below the minimum fall back to one-letter labels.
+	if n := len(dynItems); n > 0 {
+		sep := 1
+		if m.dock.IconsOnly {
+			sep = 0
+		}
+		// Per item: label + 2 padding + 2 status slot + separator.
+		avail := m.width - 4 - dockItemWidth(baseItems)
+		labelW := min(dockLabelMaxWidth, avail/n-4-sep)
+		for i := range dynItems {
+			if labelW >= dockLabelMinWidth {
+				dynItems[i].Label = fitDockLabel(dynItems[i].Label, labelW)
+			} else {
+				_, dynItems[i].Label = minimizedDockLabel(windowItems[i])
 			}
 		}
 	}
@@ -550,6 +545,21 @@ func (m *Model) updateDockRunning() {
 		}
 	}
 	m.dock.Items = result
+}
+
+// Bounds for the fixed width of window labels in the dock.
+const (
+	dockLabelMaxWidth = 16
+	dockLabelMinWidth = 4
+)
+
+// fitDockLabel truncates (with an ellipsis) or right-pads title to exactly w runes.
+func fitDockLabel(title string, w int) string {
+	r := []rune(title)
+	if len(r) > w {
+		return string(r[:w-1]) + "…"
+	}
+	return title + strings.Repeat(" ", w-len(r))
 }
 
 // findWindow returns the window with the given ID from the list, or nil.

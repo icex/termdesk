@@ -1,6 +1,7 @@
 package dock
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -496,11 +497,61 @@ func TestItemWidthTitleOnly(t *testing.T) {
 	// Add a title-only item (no icon)
 	d.Items = append(d.Items, DockItem{Label: "Hello", Special: "minimized"})
 	idx := len(d.Items) - 1
-	// " Hello " = 5 + 2
+	// "  Hello  " = 5 + 2(padding) + 2(reserved status slot)
 	w := d.itemWidth(idx)
-	expected := utf8.RuneCountInString("Hello") + 2
+	expected := utf8.RuneCountInString("Hello") + 2 + 2
 	if w != expected {
 		t.Errorf("itemWidth for title-only = %d, want %d", w, expected)
+	}
+}
+
+func TestWindowItemWidthStableAcrossStatus(t *testing.T) {
+	d := New(testRegistry(), 120)
+	d.Items = append(d.Items,
+		DockItem{Label: "one", Special: "running", WindowID: "w1"},
+		DockItem{Label: "two", Special: "minimized", WindowID: "w2"},
+	)
+	baseline := utf8.RuneCountInString(d.renderItems())
+	positions := d.itemPositions()
+
+	for _, set := range []func(*DockItem){
+		func(it *DockItem) { it.HasActivity = true },
+		func(it *DockItem) { it.HasBell = true },
+	} {
+		for i := len(d.Items) - 2; i < len(d.Items); i++ {
+			saved := d.Items[i]
+			set(&d.Items[i])
+			if got := utf8.RuneCountInString(d.renderItems()); got != baseline {
+				t.Errorf("item %d: rendered width %d, want %d", i, got, baseline)
+			}
+			if got := d.itemPositions(); !slices.Equal(got, positions) {
+				t.Errorf("item %d: positions %v, want %v", i, got, positions)
+			}
+			d.Items[i] = saved
+		}
+	}
+}
+
+func TestActivitySpinnerSkippedWhenTitleHasOwnIndicator(t *testing.T) {
+	for _, title := range []string{"✳ Claude Code", "⠋ codex", "\uf120 shell"} {
+		d := New(testRegistry(), 120)
+		d.Items = append(d.Items, DockItem{Label: title, Special: "running", WindowID: "w1", HasActivity: true})
+		before := utf8.RuneCountInString(d.renderItems())
+		for _, r := range activitySpinner {
+			if strings.ContainsRune(d.renderItems(), r) {
+				t.Errorf("%q: generic spinner rendered despite title glyph", title)
+			}
+		}
+		d.Items[len(d.Items)-1].HasActivity = false
+		if after := utf8.RuneCountInString(d.renderItems()); after != before {
+			t.Errorf("%q: width changed %d -> %d", title, before, after)
+		}
+	}
+
+	d := New(testRegistry(), 120)
+	d.Items = append(d.Items, DockItem{Label: "bash", Special: "running", WindowID: "w1", HasActivity: true})
+	if !strings.ContainsAny(d.renderItems(), string(activitySpinner)) {
+		t.Error("plain title should still get the activity spinner")
 	}
 }
 

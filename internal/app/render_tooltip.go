@@ -5,7 +5,7 @@ import (
 	"github.com/icex/termdesk/internal/config"
 )
 
-// RenderTooltip renders a small tooltip box near the hover position.
+// RenderTooltip renders a small tooltip box centered horizontally on (x, y).
 func RenderTooltip(buf *Buffer, text string, x, y int, theme config.Theme) {
 	if text == "" {
 		return
@@ -23,8 +23,8 @@ func RenderTooltip(buf *Buffer, text string, x, y int, theme config.Theme) {
 	boxW := lipgloss.Width(box)
 	boxH := lipgloss.Height(box)
 
-	// Position tooltip below and to the right of cursor
-	tx := x + 1
+	// Center the tooltip on the anchor supplied by the hovered item.
+	tx := x - boxW/2
 	ty := y + 1
 	// Clamp to buffer
 	if tx+boxW > buf.Width {

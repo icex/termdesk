@@ -650,7 +650,7 @@ func TestRenderTooltip_BasicText(t *testing.T) {
 
 	RenderTooltip(buf, "Hello Tooltip", 10, 5, theme)
 
-	// Should have content near (11, 6) — offset by +1
+	// Should have content centered horizontally on x=10, on row 6.
 	if !bufHasNonSpaceInRegion(buf, 9, 4, 30, 10) {
 		t.Error("expected tooltip content near position (10, 5)")
 	}

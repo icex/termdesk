@@ -288,6 +288,13 @@ reads. Vim/Neovim must use an OSC 52 clipboard provider to copy to a remote host
 Child OSC 52 read queries are relayed to the outer terminal; its reply goes
 back to the requesting editor, with saved text as the timeout fallback.
 
+On Linux, Codex's visible drag selections are also mirrored through Termdesk's
+terminal clipboard route. This covers locally-created sessions later attached
+over SSH, where Codex can otherwise report "Copied to host clipboard" while
+updating only the server's desktop clipboard. Codex keeps its native mouse
+selection; Vim visual selections retain their normal editor behavior. In iTerm2,
+Option-drag uses iTerm2's own local selection instead of sending mouse events.
+
 The Edit menu shows the Paste shortcut, configurable as `paste` in
 `[keybindings]`. Explicit Paste requests the outer terminal's text clipboard;
 when clipboard reads are unsupported or disabled, it falls back after one
@@ -369,6 +376,10 @@ Codex, Claude Code, Vim, and Neovim clients. It requires `ssh`, `sshd`,
 `ssh-keygen`, and those four applications. Its Claude Copy test uses a local API
 response fixture with dummy credentials; no paid model is called. Pass
 `--binary /path/to/termdesk` to check an installed build.
+`python3 scripts/test-codex-copy-e2e.py` additionally checks native Codex drag-copy
+after a real SSH reattach to a local-origin session with a working desktop
+clipboard. It requires `Xvfb`, `xauth`, and `xclip`, and uses an authenticated
+private display. An extracted Xvfb binary can be passed with `--xvfb PATH`.
 Golden render tests compare fixtures by default; update them deliberately with
 `go test ./internal/app -run '^TestGolden' -update`.
 

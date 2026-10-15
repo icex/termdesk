@@ -11,7 +11,7 @@ import time
 
 
 class SSHSession:
-    def __init__(self, binary, root, session_type, wait_for):
+    def __init__(self, binary, root, session_type, wait_for, existing=None):
         self.root, self.binary = root, binary
         self.command = lambda command: session_type.command(self, command)
         self.open_shell = lambda: session_type.open_shell(self)
@@ -70,6 +70,19 @@ class SSHSession:
                 'finally:\n'
                 ' server.terminate();server.wait(timeout=5);server.stderr.close()\n'
                 ' (root/"cleanup.json").write_text(json.dumps({"server_reaped":True,"returncode":server.returncode}))\n')
+            if existing is not None:
+                # Reattach an already-running, locally-created session. Never
+                # replace its process or environment with an SSH-launched one.
+                overrides = {key: existing.env[key] for key in [
+                    'XDG_RUNTIME_DIR', 'TERMDESK_HOME', 'TERMDESK_CONFIG_PATH']}
+                bootstrap.write_text(
+                    'import json,os,pathlib,subprocess\n'
+                    f'env=os.environ.copy();env.update({overrides!r})\n'
+                    'env.pop("TERMDESK",None)\n'
+                    'try:\n'
+                    f' subprocess.run([{binary!r},"attach",{existing.name!r}],env=env,check=True)\n'
+                    'finally:\n'
+                    f' pathlib.Path({str(root / "cleanup.json")!r}).write_text(json.dumps({{"existing_server_preserved":True}}))\n')
             self.ssh_log = open(root / 'ssh.log', 'wb'); self.logs.append(self.ssh_log)
             self.ssh = subprocess.Popen(['ssh', '-F', '/dev/null', '-tt', '-p', str(port),
                 '-i', str(root / 'client-key'), '-o', 'IdentitiesOnly=yes',
@@ -77,6 +90,7 @@ class SSHSession:
                 '-o', 'LogLevel=ERROR', '127.0.0.1', shlex.join(['python3', str(bootstrap)])],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.ssh_log)
             output = self.drain(1)
+            self.initial_output = output
             if self.ssh.poll() is not None:
                 raise AssertionError('SSH startup failed: ' + (root / 'ssh.log').read_text() + repr(output))
         except BaseException:

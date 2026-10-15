@@ -477,6 +477,18 @@ func TestClientReadLoopLargeData(t *testing.T) {
 		t.Fatalf("Pipe: %v", err)
 	}
 
+	defer clientConn.Close()
+	defer serverConn.Close()
+	defer outR.Close()
+	defer outW.Close()
+
+	// Drain concurrently: a 32 KiB payload can exceed the pipe capacity.
+	// Waiting for the writer before reading deadlocks on small/loaded pipes.
+	readData := make(chan []byte, 1)
+	go func() {
+		data, _ := io.ReadAll(outR)
+		readData <- data
+	}()
 	readDone := make(chan error, 1)
 	go func() {
 		readDone <- clientReadLoop(clientConn, outW, true)
@@ -489,13 +501,17 @@ func TestClientReadLoopLargeData(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	serverConn.Close()
 
-	err = <-readDone
-	if err != nil {
-		t.Fatalf("clientReadLoop: %v", err)
+	select {
+	case err = <-readDone:
+		if err != nil {
+			t.Fatalf("clientReadLoop: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("clientReadLoop did not finish forwarding the large payload")
 	}
 
 	outW.Close()
-	data, _ := io.ReadAll(outR)
+	data := <-readData
 	// Strip sync markers added by clientReadLoop's syncFlush.
 	data = bytes.ReplaceAll(data, syncStart, nil)
 	data = bytes.ReplaceAll(data, syncEnd, nil)

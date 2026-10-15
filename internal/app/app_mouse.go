@@ -17,6 +17,7 @@ import (
 )
 
 func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
+	m.nativeSelection = nil
 	m.tabCycleCount = 0 // mouse click breaks tab cycle
 	p := geometry.Point{X: mouse.X, Y: mouse.Y}
 
@@ -82,6 +83,7 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 				m.selDragging = true
 			} else if m.quakeTerminal.HasMouseMode() {
 				btn := teaToUvButton(mouse.Button)
+				m.beginNativeSelection(m.quakeTerminal, geometry.Rect{Width: m.width, Height: borderY}, mouse)
 				m.quakeTerminal.SendMouse(btn, mouse.X, mouse.Y, false)
 			} else if mouse.Button == tea.MouseLeft {
 				// Plain left-press in a terminal that doesn't track mouse:
@@ -539,6 +541,7 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 							localX := mouse.X - pane.Rect.X
 							localY := mouse.Y - pane.Rect.Y
 							btn := teaToUvButton(mouse.Button)
+							m.beginNativeSelection(term, pane.Rect, mouse)
 							term.SendMouse(btn, localX, localY, false)
 							if mouse.Button == tea.MouseLeft && !term.HasMouseMode() {
 								m.pendingSelActive = true
@@ -583,6 +586,7 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 				localX := mouse.X - contentRect.X // 0-indexed
 				localY := mouse.Y - contentRect.Y
 				btn := teaToUvButton(mouse.Button)
+				m.beginNativeSelection(term, contentRect, mouse)
 				term.SendMouse(btn, localX, localY, false)
 				if mouse.Button == tea.MouseLeft && !term.HasMouseMode() {
 					m.pendingSelActive = true
@@ -907,6 +911,7 @@ func (m Model) handleMouseMotion(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 				localX := mouse.X - cr.X // 0-indexed
 				localY := mouse.Y - cr.Y
 				btn := teaToUvButton(mouse.Button)
+				m.trackNativeSelection(term, mouse)
 				term.SendMouseMotion(btn, localX, localY)
 			}
 		}
@@ -978,6 +983,7 @@ func (m Model) handleMouseMotion(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleMouseRelease(mouse tea.Mouse) (tea.Model, tea.Cmd) {
+	nativeCopy := m.finishNativeSelection(mouse)
 	// A pending selection that was never promoted means the user clicked
 	// without dragging — discard it.
 	m.pendingSelActive = false
@@ -993,7 +999,7 @@ func (m Model) handleMouseRelease(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 			}
 			m.quakeTerminal.Resize(m.width, contentH)
 		}
-		return m, nil
+		return m, nativeCopy
 	}
 
 	// Finalize selection drag in copy mode
@@ -1003,7 +1009,7 @@ func (m Model) handleMouseRelease(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		if m.selStart == m.selEnd {
 			m.selActive = false
 		}
-		return m, nil
+		return m, nativeCopy
 	}
 
 	if m.drag.Active {
@@ -1015,7 +1021,7 @@ func (m Model) handleMouseRelease(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 			m.resizeTerminalForWindow(w)
 		}
 		m.drag = window.DragState{}
-		return m, nil
+		return m, nativeCopy
 	}
 	m.drag = window.DragState{}
 
@@ -1025,7 +1031,7 @@ func (m Model) handleMouseRelease(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		if mouse.Y < h-1 {
 			btn := teaToUvButton(mouse.Button)
 			m.quakeTerminal.SendMouse(btn, mouse.X, mouse.Y, true)
-			return m, nil
+			return m, nativeCopy
 		}
 	}
 
@@ -1045,7 +1051,7 @@ func (m Model) handleMouseRelease(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 			term.SendMouse(btn, localX, localY, true)
 		}
 	}
-	return m, nil
+	return m, nativeCopy
 }
 
 func (m Model) handleMouseWheel(mouse tea.Mouse) (tea.Model, tea.Cmd) {

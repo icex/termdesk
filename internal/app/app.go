@@ -61,6 +61,7 @@ type Model struct {
 	pasteGeneration    uint64
 	clipboard          *clipboard.Clipboard
 	clipboardForwarder *clipboardForwarder
+	nativeSelection    *nativeSelection
 	notifications      *notification.Manager
 	settings           *settings.Panel
 	progRef            *programRef // shared program reference for goroutine messaging

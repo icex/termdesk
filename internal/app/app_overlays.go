@@ -95,6 +95,7 @@ func (m *Model) helpOverlay() *ModalOverlay {
 			"CLIPBOARD",
 			sep,
 			"",
+			fmt.Sprintf("  %-14s Paste text (also Ctrl+Shift+V)", kb.Paste),
 			fmt.Sprintf("  %-14s Clipboard History", kb.ClipboardHistory),
 			"    Enter       Paste selected entry",
 			"    v           View entry in window",

@@ -39,6 +39,12 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.quakeVisible && m.quakeAnimating() && m.inputMode == ModeTerminal {
 		return m, nil
 	}
+	// Explicit text paste keys must not reach child apps as image-paste or
+	// insert keys. Ctrl+V stays owned by the app (e.g. Vim visual block).
+	if !m.hasActiveOverlay() && !m.menuBar.IsOpen() && !m.prefixPending &&
+		(key == m.keybindings.Paste || key == "ctrl+shift+v" || key == "shift+insert") {
+		return m, m.requestClipboardPaste()
+	}
 	// When quake is visible in Terminal mode, forward keys to quake terminal
 	// (like handleTerminalModeKey but using quakeTerminal instead of focused window)
 	if m.quakeVisible && m.quakeTerminal != nil && !m.quakeAnimating() && m.inputMode == ModeTerminal {
@@ -756,7 +762,14 @@ func (m Model) handlePrefixAction(msg tea.KeyPressMsg, key string) (tea.Model, t
 
 	// prefix+] → paste most-recent clipboard entry into focused terminal (tmux convention)
 	if key == "]" {
-		return m.executeAction("paste", msg, key)
+		if req := m.pasteRequest; req != nil {
+			for _, reader := range req.readers {
+				replyChildClipboard(reader, m.clipboard.Paste())
+			}
+		}
+		m.pasteRequest = nil
+		m.pasteText(m.clipboard.Paste())
+		return m, nil
 	}
 
 	// prefix+d → detach session (like tmux prefix+d)

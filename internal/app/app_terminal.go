@@ -501,8 +501,12 @@ func (m *Model) spawnPTYReader(windowID string, term *terminal.Terminal) {
 	// it runs unattended behind every window and has no business overwriting
 	// what the user copied.
 	if windowID != wallpaperTermID {
+		forwarder := m.clipboardForwarder
 		term.SetOnClipboard(func(text string) {
-			go safeSend(p, TerminalClipboardMsg{WindowID: windowID, Text: text})
+			forwarder.copy(p, TerminalClipboardMsg{WindowID: windowID, Text: text})
+		})
+		term.SetOnClipboardRead(func(selection string) {
+			forwarder.enqueue(p, terminalClipboardReadMsg{target: term, selection: selection})
 		})
 	}
 

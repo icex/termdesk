@@ -468,10 +468,8 @@ func BuildAppEnv() []string {
 		"TERM_PROGRAM": true, "TERM_PROGRAM_VERSION": true,
 		"WT_SESSION": true, "VTE_VERSION": true,
 		"LC_TERMINAL": true, "LC_TERMINAL_VERSION": true,
-		// Strip SSH_TTY so BT v2 queries for synchronized output (mode 2026).
-		// Without sync output, frame diffs over SSH cause visible flicker.
-		// The DECRQM query/response round-trips through the session proxy correctly.
-		"SSH_TTY": true,
+		// Preserve SSH_TTY for child apps' remote clipboard detection.
+		// runApp supplies its own Bubble Tea environment for mode queries.
 		// Managed by BuildAppEnv — strip to avoid duplicates.
 		"TERMDESK": true, "TERMDESK_GRAPHICS": true,
 		"TERMDESK_ITERM2": true, "TERMDESK_SIXEL": true,

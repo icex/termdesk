@@ -152,39 +152,6 @@ func main() {
 	createOrAttach(sess, session.DefaultSession)
 }
 
-// bracketedPasteFilter manually parses bracketed paste sequences when SSH_TTY disables BT's parser.
-// The session server enables bracketed paste mode (\x1b[?2004h), but BT skips parsing when SSH_TTY is set.
-// This filter intercepts key messages containing paste sequences and converts them to PasteMsg.
-func bracketedPasteFilter(m tea.Model, msg tea.Msg) tea.Msg {
-	keyMsg, ok := msg.(tea.KeyPressMsg)
-	if !ok {
-		return msg
-	}
-
-	// Bracketed paste format: \x1b[200~...content...\x1b[201~
-	// The entire sequence arrives as a single key message with Text containing the full sequence
-	text := keyMsg.Text
-	if len(text) < 12 {
-		return msg // too short to contain bracketed paste
-	}
-
-	// Check for start marker
-	if !strings.HasPrefix(text, "\x1b[200~") {
-		return msg
-	}
-
-	// Find end marker
-	endIdx := strings.Index(text, "\x1b[201~")
-	if endIdx == -1 {
-		return msg // incomplete bracketed paste sequence
-	}
-
-	// Extract pasted content (between start and end markers)
-	content := text[6:endIdx] // skip "\x1b[200~"
-
-	return tea.PasteMsg{Content: content}
-}
-
 // runApp runs the Bubble Tea app directly (used by the server on a slave PTY).
 func runApp() {
 	m := app.New()
@@ -194,13 +161,12 @@ func runApp() {
 	// behind a PTY proxy — it skips those features. Synchronized output
 	// (mode 2026) is enabled separately: the server injects a fake DECRQM
 	// response into the PTY so BT's input handler enables sync output.
-	// Bracketed paste mode is enabled by the session server in the
-	// terminal, so we use a filter to manually parse those sequences.
+	// Ultraviolet parses bracketed paste even behind SSH/PTY proxies,
+	// including markers and payloads fragmented across reads.
 	// Color profile is auto-detected from COLORTERM env var set by the
 	// session server (preserves the connecting client's capabilities).
 	opts := []tea.ProgramOption{
 		tea.WithEnvironment(append(os.Environ(), "SSH_TTY=/dev/pts/proxy")),
-		tea.WithFilter(bracketedPasteFilter),
 	}
 	// Force TrueColor only when COLORTERM confirms support; otherwise let
 	// Bubble Tea auto-detect from TERM/COLORTERM (supports 256-color etc).
@@ -520,6 +486,7 @@ func listKeybindings() {
 		{"Tile Columns", kb.TileColumns},
 		{"Tile Rows", kb.TileRows},
 		{"Cascade", kb.Cascade},
+		{"Paste", kb.Paste},
 		{"Clipboard History", kb.ClipboardHistory},
 		{"Notification Center", kb.NotificationCenter},
 		{"Settings", kb.Settings},

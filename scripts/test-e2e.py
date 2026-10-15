@@ -35,7 +35,9 @@ class Session:
     def __init__(self, binary, root, name, cwd, project_dir=None, **config):
         self.root, self.binary, self.name = root, binary, name
         self.env = os.environ.copy()
-        self.env.update(XDG_RUNTIME_DIR=str(root), TERMDESK_HOME=str(root),
+        self.env.update(HOME=str(root), XDG_CONFIG_HOME=str(root / 'config'),
+                        XDG_CACHE_HOME=str(root / 'cache'),
+                        XDG_RUNTIME_DIR=str(root), TERMDESK_HOME=str(root),
                         TERMDESK_CONFIG_PATH=str(root / 'config.toml'),
                         TERMDESK_LOG_LEVEL='off', TERMDESK_GRAPHICS='kitty',
                         SHELL='/bin/bash', TERM='xterm-256color')

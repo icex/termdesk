@@ -87,8 +87,9 @@ type Terminal struct {
 	bellPending     bool   // set by emu Bell callback; fired after emu.Write returns
 
 	// Clipboard passthrough — intercepts OSC 52 from child apps.
-	onClipboard func(text string) // called when child app copies via OSC 52
-	osc52Buf    []byte            // buffer for incomplete OSC 52 sequences (emuWriteLoop only)
+	onClipboardRead func(selection string) // requests the connecting terminal clipboard
+	onClipboard     func(text string)      // called when child app copies via OSC 52
+	osc52Buf        []byte                 // buffer for incomplete OSC 52 sequences (emuWriteLoop only)
 
 	// Image passthrough (sixel/iTerm2) — intercepts DCS/OSC sequences from child apps.
 	onImageGraphics func(rawData []byte, format ImageFormat, estimatedCellRows int) int
@@ -517,8 +518,6 @@ func (t *Terminal) extractOSC52(data []byte) []byte {
 	if len(t.osc52Buf) > 0 {
 		data = append(t.osc52Buf, data...)
 		t.osc52Buf = nil
-	} else if !bytes.Contains(data, osc52Prefix) {
-		return data
 	}
 
 	var result []byte
@@ -575,6 +574,14 @@ func (t *Terminal) extractOSC52(data []byte) []byte {
 		data = data[next:]
 	}
 
+	// Even the introducer can span PTY reads (including a lone ESC).
+	// Keep only the suffix that can still become OSC 52; pass other bytes on.
+	for n := len(osc52Prefix) - 1; n > 0; n-- {
+		if bytes.HasSuffix(data, osc52Prefix[:n]) {
+			t.osc52Buf = append([]byte(nil), data[len(data)-n:]...)
+			return append(result, data[:len(data)-n]...)
+		}
+	}
 	return append(result, data...)
 }
 
@@ -582,10 +589,8 @@ func (t *Terminal) extractOSC52(data []byte) []byte {
 func (t *Terminal) handleOSC52(payload []byte) {
 	t.mu.Lock()
 	fn := t.onClipboard
+	readFn := t.onClipboardRead
 	t.mu.Unlock()
-	if fn == nil {
-		return
-	}
 
 	sep := bytes.IndexByte(payload, ';')
 	if sep < 0 {
@@ -593,16 +598,24 @@ func (t *Terminal) handleOSC52(payload []byte) {
 	}
 	pc, pd := payload[:sep], payload[sep+1:]
 
-	// "?" is a read query. Answering would mean handing the host clipboard to
-	// the child, which we can't read — swallow it rather than reply wrongly.
-	if len(pd) == 0 || bytes.Equal(pd, []byte("?")) {
-		return
-	}
 	// Pc selects the target buffer: c(lipboard), p(rimary), q, s(elect), or cut
 	// buffers 0-7. Empty means "s0" per spec but every app in practice means the
 	// clipboard. Mirror only the ones the user would call "the clipboard" —
 	// primary-only and cut-buffer writes are scratch space, not a copy.
 	if len(pc) > 0 && !bytes.ContainsAny(pc, "cs") {
+		return
+	}
+	if bytes.Equal(pd, []byte("?")) {
+		if readFn != nil {
+			selection := "c"
+			if len(pc) > 0 && !bytes.ContainsRune(pc, 'c') {
+				selection = "s"
+			}
+			readFn(selection)
+		}
+		return
+	}
+	if len(pd) == 0 || fn == nil {
 		return
 	}
 
@@ -901,6 +914,13 @@ func (t *Terminal) IsAltScreen() bool {
 func (t *Terminal) SetOnOutput(fn func()) {
 	t.mu.Lock()
 	t.onOutput = fn
+	t.mu.Unlock()
+}
+
+// SetOnClipboardRead sets the nonblocking OSC 52 read-query callback.
+func (t *Terminal) SetOnClipboardRead(fn func(selection string)) {
+	t.mu.Lock()
+	t.onClipboardRead = fn
 	t.mu.Unlock()
 }
 
@@ -1709,6 +1729,7 @@ func (t *Terminal) Close() error {
 	t.onImageGraphics = nil
 	t.onScreenClear = nil
 	t.onClipboard = nil
+	t.onClipboardRead = nil
 	if t.syncFireTimer != nil {
 		t.syncFireTimer.Stop()
 		t.syncFireTimer = nil

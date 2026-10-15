@@ -1980,3 +1980,13 @@ func TestBuildAppEnvWezTermFullStack(t *testing.T) {
 		t.Fatal("expected TERMDESK_SIXEL=1 for WezTerm")
 	}
 }
+
+func TestBuildAppEnvPreservesSSHClipboardDetection(t *testing.T) {
+	t.Setenv("SSH_TTY", "/dev/pts/clipboard-test")
+	for _, e := range BuildAppEnv() {
+		if e == "SSH_TTY=/dev/pts/clipboard-test" {
+			return
+		}
+	}
+	t.Fatal("SSH_TTY was stripped; child apps cannot reliably detect remote clipboard use")
+}

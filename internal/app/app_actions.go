@@ -433,6 +433,9 @@ func (m Model) executeAction(action string, msg tea.KeyPressMsg, key string) (te
 		}
 		return m, tickAnimation()
 
+	case "paste":
+		return m, m.requestClipboardPaste()
+
 	case "clipboard_history":
 		m.clipboard.ToggleHistory()
 		return m, nil
@@ -824,13 +827,7 @@ func (m Model) executeMenuAction(action string) (tea.Model, tea.Cmd) {
 	case "clear_selection":
 		m.selActive = false
 	case "paste":
-		text := m.clipboard.Paste()
-		if text != "" {
-			if _, term := m.focusedTerminal(); term != nil {
-				term.Paste(text)
-			}
-		}
-		m.inputMode = ModeTerminal
+		return m, m.requestClipboardPaste()
 	case "settings":
 		m.settings.Show()
 	case "show_keys":

@@ -72,8 +72,9 @@ type BellMsg struct {
 // no local clipboard access (anything over ssh, tmux, nvim with
 // clipboard=osc52) rely on this to reach the host clipboard.
 type TerminalClipboardMsg struct {
-	WindowID string
-	Text     string
+	WindowID  string
+	Text      string
+	forwarded bool // host write is serialized by clipboardForwarder
 }
 
 // CustomWidgetResultMsg delivers async shell widget command results.

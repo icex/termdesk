@@ -250,16 +250,38 @@ func (m Model) handleUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouseWheel(tea.Mouse(msg))
 
 	case tea.PasteMsg:
-		// Host clipboard paste (Cmd+V on macOS, Ctrl+Shift+V elsewhere) should always
-		// land in the focused terminal regardless of input mode. If we're in copy mode
-		// the snapshot is frozen and there's no useful place for the paste to go, so
-		// drop back to Terminal mode first.
-		if m.inputMode == ModeCopy {
-			m.exitCopyMode()
-			m.inputMode = ModeTerminal
+		// The outer terminal already supplied text. Cancel an outstanding
+		// clipboard read so its reply/timeout cannot paste it a second time.
+		if req := m.pasteRequest; req != nil {
+			for _, reader := range req.readers {
+				replyChildClipboard(reader, msg.Content)
+			}
 		}
-		if _, term := m.focusedTerminal(); term != nil {
-			term.Paste(msg.Content)
+		m.pasteRequest = nil
+		if msg.Content != "" {
+			m.clipboard.Copy(msg.Content)
+		}
+		m.pasteText(msg.Content)
+		return m, nil
+
+	case terminalClipboardReadMsg:
+		return m, m.requestChildClipboardRead(msg)
+
+	case tea.ClipboardMsg:
+		if m.pasteRequest != nil && (msg.Selection == 'c' || msg.Selection == 0) {
+			req := m.pasteRequest
+			m.pasteRequest = nil
+			if msg.Content != "" {
+				m.clipboard.Copy(msg.Content)
+			}
+			m.finishClipboardPaste(req, msg.Content)
+		}
+		return m, nil
+
+	case clipboardPasteTimeoutMsg:
+		if req := m.pasteRequest; req != nil && req.generation == uint64(msg) {
+			m.pasteRequest = nil
+			m.finishClipboardPaste(req, req.fallback)
 		}
 		return m, nil
 
@@ -360,6 +382,9 @@ func (m Model) handleUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.clipboard.Copy(msg.Text)
+		if msg.forwarded {
+			return m, nil
+		}
 		return m, osc52SetCmd(msg.Text)
 
 	case PtyOutputMsg:

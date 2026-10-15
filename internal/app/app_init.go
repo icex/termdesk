@@ -103,6 +103,7 @@ func New() Model {
 		dock:                  d,
 		launcher:              launcher.New(appRegistry),
 		clipboard:             clipboard.New(),
+		clipboardForwarder:    &clipboardForwarder{},
 		notifications:         notification.New(),
 		settings:              settings.New(userCfg, widgetReg.All(), enabledWidgets),
 		progRef:               &programRef{},

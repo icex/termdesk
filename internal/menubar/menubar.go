@@ -70,7 +70,7 @@ func New(width int, kb config.KeyBindings, registry []registry.RegistryEntry, wb
 				{Label: "\uf011  Quit", Shortcut: "Ctrl+Q", Action: "quit"},
 			}},
 			{Label: "Edit", Items: []MenuItem{
-				{Label: "\uf0ea  Paste", Action: "paste"},
+				{Label: "\uf0ea  Paste", Shortcut: kb.Paste + " / Pfx+]", Action: "paste"},
 				{Label: "\uf46d  Clipboard History", Shortcut: kb.ClipboardHistory, Action: "clipboard_history"},
 				{Label: "─", Disabled: true},
 				{Label: "\ueb56  Split Horizontal", Shortcut: "Pfx+%", Action: "split_horizontal"},

@@ -271,12 +271,38 @@ In Terminal mode, every key goes to the running program. The **prefix key**
 | `Ctrl+A` `Esc` | Drop to Normal mode |
 | `Ctrl+A` `Ctrl+A` | Send a literal `Ctrl+A` |
 | `Ctrl+A` `c` | Copy mode |
+| `Shift+Insert` / `Ctrl+Shift+V` | Paste text from the host clipboard |
+| `Ctrl+A` `]` | Paste the latest Termdesk clipboard entry |
+| `Ctrl+A` `y` | Clipboard history |
 | `Ctrl+A` `d` | Detach session |
 | `Ctrl+A` `%` / `"` | Split pane horizontal / vertical |
 | `Ctrl+A` `x` | Close focused pane |
 | `Ctrl+A` arrows / `Tab` | Navigate panes |
 | `` Ctrl+` `` | Toggle quake terminal |
 | `F2` | Escape hatch back to Normal mode |
+
+Text copied by a child app through OSC 52 (for example, Claude Code or
+Neovim's OSC 52 provider) is saved in Termdesk's clipboard history and forwarded
+to the connecting terminal. Split escape sequences are supported across PTY/SSH
+reads. Vim/Neovim must use an OSC 52 clipboard provider to copy to a remote host.
+Child OSC 52 read queries are relayed to the outer terminal; its reply goes
+back to the requesting editor, with saved text as the timeout fallback.
+
+The Edit menu shows the Paste shortcut, configurable as `paste` in
+`[keybindings]`. Explicit Paste requests the outer terminal's text clipboard;
+when clipboard reads are unsupported or disabled, it falls back after one
+second to the latest Termdesk entry. `Ctrl+A` `]` pastes that entry immediately.
+Your terminal's native Paste command (`Cmd+V` on macOS, typically
+`Ctrl+Shift+V` elsewhere) sends clipboard text directly without a read query.
+Native pastes also update Termdesk's history. `Ctrl+V` is passed to the child
+unchanged, preserving Vim visual block mode and agent image-paste commands.
+
+Host clipboard access depends on the outer terminal's OSC 52 support and
+permissions. Terminals without it can still use native text paste and Termdesk's
+internal copy/history/paste. If an emulator maps `Ctrl+Shift+V` to plain `Ctrl+V`,
+use its native Paste command, `Shift+Insert`, or `Ctrl+A` `]`; the two control
+keys are indistinguishable on the wire. OSC 52 transfers text; transferring local
+clipboard images over SSH requires a separate file/image transport.
 
 ### Copy mode (vim-style)
 
@@ -333,10 +359,16 @@ Review regression checks:
 go test -race ./...
 go vet ./...
 python3 scripts/test-e2e.py
+python3 scripts/test-clipboard-e2e.py
 ```
 
 The end-to-end script builds a temporary binary and uses its own config, trust,
 buffers, sockets, and controlling PTYs. It never connects to existing sessions.
+The clipboard suite also starts a private loopback sshd and checks the installed
+Codex, Claude Code, Vim, and Neovim clients. It requires `ssh`, `sshd`,
+`ssh-keygen`, and those four applications. Its Claude Copy test uses a local API
+response fixture with dummy credentials; no paid model is called. Pass
+`--binary /path/to/termdesk` to check an installed build.
 Golden render tests compare fixtures by default; update them deliberately with
 `go test ./internal/app -run '^TestGolden' -update`.
 

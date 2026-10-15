@@ -3,7 +3,7 @@ BUILD_DIR=bin
 GO=go
 GOFLAGS=-v
 
-.PHONY: all build run test test-coverage test-golden-update lint clean fmt vet test-e2e
+.PHONY: all build run test test-coverage test-golden-update lint clean fmt vet test-e2e test-clipboard-e2e
 
 all: build
 
@@ -19,6 +19,9 @@ test:
 
 test-e2e:
 	python3 scripts/test-e2e.py
+
+test-clipboard-e2e:
+	python3 scripts/test-clipboard-e2e.py
 
 test-coverage:
 	$(GO) test ./... -coverprofile=coverage.out -covermode=atomic

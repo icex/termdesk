@@ -55,6 +55,7 @@ type KeyBindings struct {
 	TileColumns        string // tile windows in columns (default "|")
 	TileRows           string // tile windows in rows (default "_")
 	Cascade            string // cascade windows (default "\\")
+	Paste              string // paste text from host clipboard (default "shift+insert")
 	ClipboardHistory   string // toggle clipboard history (default "y")
 	MenuEdit           string // open Edit menu (default "e")
 	NotificationCenter string // toggle notification center (default "b")
@@ -117,6 +118,7 @@ func DefaultKeyBindings() KeyBindings {
 		TileColumns:        "|",
 		TileRows:           "_",
 		Cascade:            "\\",
+		Paste:              "shift+insert",
 		ClipboardHistory:   "y",
 		MenuEdit:           "e",
 		NotificationCenter: "b",
@@ -526,6 +528,8 @@ func parseKeybinding(kb *KeyBindings, key, val string) {
 		kb.TileRows = val
 	case "cascade":
 		kb.Cascade = val
+	case "paste":
+		kb.Paste = val
 	case "clipboard_history":
 		kb.ClipboardHistory = val
 	case "menu_edit":
@@ -904,6 +908,9 @@ func saveUserConfig(cfg UserConfig) error {
 	}
 	if kb.Cascade != defaults.Cascade {
 		kbLines = append(kbLines, fmt.Sprintf("cascade = %q", kb.Cascade))
+	}
+	if kb.Paste != defaults.Paste {
+		kbLines = append(kbLines, fmt.Sprintf("paste = %q", kb.Paste))
 	}
 	if kb.ClipboardHistory != defaults.ClipboardHistory {
 		kbLines = append(kbLines, fmt.Sprintf("clipboard_history = %q", kb.ClipboardHistory))

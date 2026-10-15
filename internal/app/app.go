@@ -57,7 +57,10 @@ type Model struct {
 	menuBar            *menubar.MenuBar
 	dock               *dock.Dock
 	launcher           *launcher.Launcher
+	pasteRequest       *pasteRequest
+	pasteGeneration    uint64
 	clipboard          *clipboard.Clipboard
+	clipboardForwarder *clipboardForwarder
 	notifications      *notification.Manager
 	settings           *settings.Panel
 	progRef            *programRef // shared program reference for goroutine messaging
@@ -474,6 +477,7 @@ func BuildActionMap(kb config.KeyBindings) map[string]string {
 	am[kb.MenuEdit] = "menu_edit"
 	am[kb.MenuApps] = "menu_apps"
 	am[kb.MenuView] = "menu_view"
+	am[kb.Paste] = "paste"
 	am[kb.ClipboardHistory] = "clipboard_history"
 	am[kb.NotificationCenter] = "notification_center"
 	am[kb.Settings] = "settings"

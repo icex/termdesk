@@ -339,37 +339,34 @@ func (m *Manager) CycleBackward() {
 	}
 }
 
-// ClampAllWindows repositions and resizes all windows to fit within the
-// current work area. Called after a terminal resize to prevent windows
-// from being off-screen.
+// Compact reports whether the screen is too small to lay windows out side by
+// side (e.g. a phone over ssh). While it is, every resizable window is shown
+// maximized. Measured on the full bounds, not the work area, so hiding the
+// dock for a maximized window can't flip it back and forth.
+func (m *Manager) Compact() bool {
+	b := m.bounds
+	if b.Width <= 0 || b.Height <= 0 {
+		return false // size not known yet
+	}
+	return b.Width < 2*MinWindowWidth || b.Height < 2*MinWindowHeight
+}
+
+// ClampAllWindows re-lays out every window for the current work area:
+// maximized windows fill it, snapped windows keep their half, and free
+// windows are pulled back inside. Entering compact mode auto-maximizes
+// every resizable window; leaving it restores the ones it maximized.
 func (m *Manager) ClampAllWindows() {
 	wa := m.WorkArea()
+	compact := m.Compact()
 	for _, w := range m.windows {
-		if w.Minimized {
-			continue
+		switch {
+		case compact && w.Resizable && !w.IsMaximized():
+			Maximize(w, wa)
+			w.AutoMaximized = true
+		case !compact && w.AutoMaximized:
+			Restore(w, wa)
 		}
-		if w.IsMaximized() {
-			w.Rect = wa
-			continue
-		}
-		if w.Rect.Width > wa.Width {
-			w.Rect.Width = wa.Width
-		}
-		if w.Rect.Height > wa.Height {
-			w.Rect.Height = wa.Height
-		}
-		if w.Rect.X+w.Rect.Width > wa.X+wa.Width {
-			w.Rect.X = wa.X + wa.Width - w.Rect.Width
-		}
-		if w.Rect.Y+w.Rect.Height > wa.Y+wa.Height {
-			w.Rect.Y = wa.Y + wa.Height - w.Rect.Height
-		}
-		if w.Rect.X < wa.X {
-			w.Rect.X = wa.X
-		}
-		if w.Rect.Y < wa.Y {
-			w.Rect.Y = wa.Y
-		}
+		Fit(w, wa)
 	}
 }
 

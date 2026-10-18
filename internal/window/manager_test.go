@@ -531,19 +531,92 @@ func TestClampAllWindowsMaximized(t *testing.T) {
 	}
 }
 
-func TestClampAllWindowsSkipsMinimized(t *testing.T) {
+func TestClampAllWindowsFitsMinimized(t *testing.T) {
 	m := NewManager(100, 50)
 	m.SetReserved(1, 1)
 
-	w := newTestWindow("w1", "Win1", -10, -10, 40, 20)
+	w := newTestWindow("w1", "Win1", 0, 1, 40, 20)
 	m.AddWindow(w)
+	Maximize(w, m.WorkArea())
 	w.Minimized = true
-	origRect := w.Rect
 
+	m.SetBounds(160, 60)
 	m.ClampAllWindows()
 
-	if w.Rect != origRect {
-		t.Errorf("minimized window should be unchanged: got %v, want %v", w.Rect, origRect)
+	// Unminimizing must bring the window back at the new size.
+	if w.Rect != m.WorkArea() {
+		t.Errorf("minimized maximized window = %v, want %v", w.Rect, m.WorkArea())
+	}
+}
+
+func TestClampAllWindowsKeepsSnap(t *testing.T) {
+	m := NewManager(100, 50)
+	m.SetReserved(1, 1)
+	left := newTestWindow("l", "L", 0, 0, 40, 20)
+	right := newTestWindow("r", "R", 0, 0, 40, 20)
+	m.AddWindow(left)
+	m.AddWindow(right)
+	SnapLeft(left, m.WorkArea())
+	SnapRight(right, m.WorkArea())
+
+	m.SetBounds(200, 60)
+	m.ClampAllWindows()
+
+	wa := m.WorkArea()
+	if want := (geometry.Rect{X: 0, Y: wa.Y, Width: 100, Height: wa.Height}); left.Rect != want {
+		t.Errorf("left = %v, want %v", left.Rect, want)
+	}
+	if want := (geometry.Rect{X: 100, Y: wa.Y, Width: 100, Height: wa.Height}); right.Rect != want {
+		t.Errorf("right = %v, want %v", right.Rect, want)
+	}
+}
+
+func TestClampAllWindowsCompactRoundTrip(t *testing.T) {
+	m := NewManager(160, 50)
+	m.SetReserved(1, 1)
+	free := newTestWindow("f", "F", 10, 5, 60, 20)
+	snapped := newTestWindow("s", "S", 0, 0, 40, 20)
+	maxed := newTestWindow("m", "M", 20, 8, 50, 15)
+	fixed := newTestWindow("x", "X", 30, 10, 30, 12)
+	fixed.Resizable = false
+	for _, w := range []*Window{free, snapped, maxed, fixed} {
+		m.AddWindow(w)
+	}
+	SnapRight(snapped, m.WorkArea())
+	Maximize(maxed, m.WorkArea())
+	freeRect := free.Rect
+
+	// Phone-sized screen: everything resizable goes full-screen.
+	m.SetBounds(45, 30)
+	if !m.Compact() {
+		t.Fatal("45x30 should be compact")
+	}
+	m.ClampAllWindows()
+	wa := m.WorkArea()
+	for _, w := range []*Window{free, snapped, maxed} {
+		if w.Rect != wa || !w.IsMaximized() {
+			t.Errorf("%s in compact = %v (max=%v), want %v", w.ID, w.Rect, w.IsMaximized(), wa)
+		}
+	}
+	if maxed.AutoMaximized {
+		t.Error("explicitly maximized window must not be marked auto-maximized")
+	}
+	if fixed.IsMaximized() {
+		t.Error("fixed-size window must not be maximized")
+	}
+
+	// Back on a desktop-sized screen: previous layout returns.
+	m.SetBounds(200, 60)
+	m.ClampAllWindows()
+	wa = m.WorkArea()
+	if free.Rect != freeRect || free.IsMaximized() {
+		t.Errorf("free = %v (max=%v), want %v", free.Rect, free.IsMaximized(), freeRect)
+	}
+	if want := SnapRect(SnapRightHalf, wa); snapped.Rect != want || snapped.IsMaximized() {
+		t.Errorf("snapped = %v (max=%v), want %v", snapped.Rect, snapped.IsMaximized(), want)
+	}
+	if maxed.Rect != wa || !maxed.IsMaximized() {
+		t.Errorf("maximized = %v, want %v", maxed.Rect, wa)
 	}
 }
 

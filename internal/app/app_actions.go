@@ -266,6 +266,7 @@ func (m Model) executeAction(action string, msg tea.KeyPressMsg, key string) (te
 			m.disablePersistentTiling()
 			from := fw.Rect
 			window.Maximize(fw, m.wm.WorkArea())
+			fw.AutoMaximized = false
 			m.startWindowAnimation(fw.ID, AnimMaximize, from, fw.Rect)
 			m.resizeTerminalForWindow(fw)
 			m.updateDockReserved()
@@ -275,7 +276,7 @@ func (m Model) executeAction(action string, msg tea.KeyPressMsg, key string) (te
 	case "restore":
 		if fw := m.wm.FocusedWindow(); fw != nil && !fw.Minimized {
 			from := fw.Rect
-			window.Restore(fw)
+			window.Restore(fw, m.wm.WorkArea())
 			m.startWindowAnimation(fw.ID, AnimRestore, from, fw.Rect)
 			m.resizeTerminalForWindow(fw)
 			m.updateDockReserved()
@@ -660,12 +661,12 @@ func (m Model) executeMenuAction(action string) (tea.Model, tea.Cmd) {
 	case "maximize":
 		if fw := m.wm.FocusedWindow(); fw != nil && fw.Resizable {
 			from := fw.Rect
-			if fw.IsMaximized() {
-				window.Restore(fw)
+			if fw.IsMaximized() && !fw.AutoMaximized {
+				window.Restore(fw, m.wm.WorkArea())
 				m.startWindowAnimation(fw.ID, AnimRestore, from, fw.Rect)
 			} else {
 				m.disablePersistentTiling()
-				window.Maximize(fw, m.wm.WorkArea())
+				window.ToggleMaximize(fw, m.wm.WorkArea())
 				m.startWindowAnimation(fw.ID, AnimMaximize, from, fw.Rect)
 			}
 			m.resizeTerminalForWindow(fw)
@@ -1024,18 +1025,21 @@ func (m *Model) hasMaximizedWindow() bool {
 }
 
 // updateDockReserved adjusts the bottom reserved space based on dock visibility.
-// When the reserved space changes, maximized windows are re-expanded to match the new work area.
+// When the reserved space changes, maximized and snapped windows are re-fitted to the new work area.
 func (m *Model) updateDockReserved() {
 	bottom := 1
 	if m.hideDockWhenMaximized && m.hasMaximizedWindow() {
 		bottom = 0
 	}
 	m.wm.SetReserved(1, bottom)
-	// Re-expand maximized windows to the new work area
 	wa := m.wm.WorkArea()
 	for _, w := range m.wm.Windows() {
-		if w.IsMaximized() && w.Rect != wa {
-			w.Rect = wa
+		if !w.IsMaximized() && w.Snap == window.SnapNone {
+			continue
+		}
+		prev := w.Rect
+		window.Fit(w, wa)
+		if w.Rect != prev {
 			m.resizeTerminalForWindow(w)
 		}
 	}

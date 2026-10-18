@@ -18,10 +18,16 @@ type Window struct {
 	Resizable bool
 	Draggable bool
 	Modal     bool
-	Content tea.Model
+	Content   tea.Model
 
 	// PreMaxRect stores the rect before maximization for restore.
-	PreMaxRect      *geometry.Rect
+	PreMaxRect *geometry.Rect
+	// AutoMaximized is true when the window is maximized only because the
+	// screen is too small for a windowed layout; it is restored once space returns.
+	AutoMaximized bool
+	// Snap is the work-area half the window is pinned to, re-applied whenever
+	// the work area changes. SnapNone for a freely placed window.
+	Snap            SnapEdge
 	HasNotification bool     // true when window has unread output/bell
 	Exited          bool     // true when the PTY process has exited (hold-open mode)
 	Command         string   // command that launched this window
@@ -39,6 +45,47 @@ type Window struct {
 	// Split pane state
 	SplitRoot   *SplitNode // nil = single terminal, non-nil = split tree
 	FocusedPane string     // terminal ID of focused pane (empty when unsplit)
+}
+
+// SnapEdge identifies the half of the work area a snapped window occupies.
+type SnapEdge int
+
+const (
+	SnapNone SnapEdge = iota
+	SnapLeftHalf
+	SnapRightHalf
+	SnapTopHalf
+	SnapBottomHalf
+)
+
+// String returns the workspace-file name of the snap edge ("" for SnapNone).
+func (e SnapEdge) String() string {
+	switch e {
+	case SnapLeftHalf:
+		return "left"
+	case SnapRightHalf:
+		return "right"
+	case SnapTopHalf:
+		return "top"
+	case SnapBottomHalf:
+		return "bottom"
+	}
+	return ""
+}
+
+// ParseSnapEdge is the inverse of SnapEdge.String; unknown names yield SnapNone.
+func ParseSnapEdge(s string) SnapEdge {
+	switch s {
+	case "left":
+		return SnapLeftHalf
+	case "right":
+		return SnapRightHalf
+	case "top":
+		return SnapTopHalf
+	case "bottom":
+		return SnapBottomHalf
+	}
+	return SnapNone
 }
 
 // NewWindow creates a window with sensible defaults.

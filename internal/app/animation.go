@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/harmonica"
+	"github.com/icex/termdesk/internal/window"
 	"github.com/icex/termdesk/pkg/geometry"
 
 	tea "charm.land/bubbletea/v2"
@@ -265,9 +266,11 @@ func (m *Model) finalizeAnimation(a *Animation) {
 	case AnimMinimize:
 		// w.Minimized is set immediately in minimizeWindow() for instant dock update.
 		w.Rect = a.StartRect // restore to pre-minimize rect for later unminimize
+		window.Fit(w, m.wm.WorkArea())
 	case AnimRestore2:
 		w.Rect = a.EndRect
 		w.Minimized = false
+		window.Fit(w, m.wm.WorkArea())
 		m.resizeTerminalForWindow(w)
 	case AnimExpose:
 		// Window stays at its real rect; exposé rendering handles display
@@ -276,6 +279,8 @@ func (m *Model) finalizeAnimation(a *Animation) {
 		m.resizeTerminalForWindow(w)
 	default:
 		w.Rect = a.EndRect
+		// The screen may have been resized while the animation ran.
+		window.Fit(w, m.wm.WorkArea())
 		m.resizeTerminalForWindow(w)
 		m.updateDockReserved()
 	}

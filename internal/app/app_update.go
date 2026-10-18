@@ -168,8 +168,8 @@ func (m Model) handleUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.lastWindowSizeAt = time.Now()
 		m.wm.SetBounds(msg.Width, msg.Height)
-		m.updateDockReserved()
 		m.wm.ClampAllWindows()
+		m.updateDockReserved()
 		m.menuBar.SetWidth(msg.Width)
 		m.dock.SetWidth(msg.Width)
 		m.ready = true

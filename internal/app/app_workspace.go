@@ -161,6 +161,8 @@ func (m *Model) captureWorkspaceState() workspace.WorkspaceState {
 			ZIndex:        w.ZIndex,
 			Minimized:     w.Minimized,
 			Resizable:     w.Resizable,
+			AutoMaximized: w.AutoMaximized,
+			Snap:          w.Snap.String(),
 			ThemeOverride: w.ThemeOverride,
 		}
 
@@ -289,6 +291,7 @@ func (m *Model) restoreWorkspace(state *workspace.WorkspaceState, projectDir str
 		win.ZIndex = ws.ZIndex
 		win.Minimized = ws.Minimized
 		win.Resizable = ws.Resizable
+		win.Snap = window.ParseSnapEdge(ws.Snap)
 		win.TitleBarHeight = m.theme.TitleBarRows()
 		win.Icon, win.IconColor = m.windowIcon(ws.Command)
 		win.ThemeOverride = ws.ThemeOverride
@@ -299,6 +302,7 @@ func (m *Model) restoreWorkspace(state *workspace.WorkspaceState, projectDir str
 				Width:  ws.PreMaxRect.Width,
 				Height: ws.PreMaxRect.Height,
 			}
+			win.AutoMaximized = ws.AutoMaximized
 		}
 
 		m.wm.AddWindow(win)
@@ -425,6 +429,13 @@ func (m *Model) restoreWorkspace(state *workspace.WorkspaceState, projectDir str
 				}
 			}
 		}
+	}
+
+	// The workspace may have been saved on a different screen size.
+	if m.width > 0 && m.height > 0 {
+		m.wm.ClampAllWindows()
+		m.updateDockReserved()
+		m.resizeAllTerminals()
 	}
 
 	// Restore focused window — prefer a non-minimized window.

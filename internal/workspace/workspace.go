@@ -61,6 +61,8 @@ type WindowState struct {
 	Minimized     bool
 	Resizable     bool           // false for fixed-size windows (default true)
 	PreMaxRect    *geometry.Rect // nil if not maximized
+	AutoMaximized bool           // maximized only because the screen was too small
+	Snap          string         // "left", "right", "top", "bottom", or "" when not snapped
 
 	// ThemeOverride is the window's content theme name (empty = inherit global).
 	// Applies to terminal content only, not window chrome.
@@ -400,6 +402,12 @@ func serializeWorkspace(state WorkspaceState) string {
 			sb.WriteString(fmt.Sprintf("premax_y = %d\n", w.PreMaxRect.Y))
 			sb.WriteString(fmt.Sprintf("premax_width = %d\n", w.PreMaxRect.Width))
 			sb.WriteString(fmt.Sprintf("premax_height = %d\n", w.PreMaxRect.Height))
+			if w.AutoMaximized {
+				sb.WriteString("auto_maximized = true\n")
+			}
+		}
+		if w.Snap != "" {
+			sb.WriteString(fmt.Sprintf("snap = \"%s\"\n", escapeString(w.Snap)))
 		}
 		if w.ThemeOverride != "" {
 			sb.WriteString(fmt.Sprintf("theme_override = \"%s\"\n", escapeString(w.ThemeOverride)))
@@ -553,6 +561,10 @@ func parseWorkspace(state *WorkspaceState, content string) {
 				case "premax_height":
 					currentWindow.PreMaxRect.Height = v
 				}
+			case "auto_maximized":
+				currentWindow.AutoMaximized = (val == "true")
+			case "snap":
+				currentWindow.Snap = unescapeString(extractQuotedValue(val))
 			case "theme_override":
 				currentWindow.ThemeOverride = unescapeString(extractQuotedValue(val))
 			case "buffer_file":

@@ -59,7 +59,7 @@ func TestRestore(t *testing.T) {
 	original := geometry.Rect{X: 20, Y: 10, Width: 40, Height: 20}
 	w := NewWindow("w1", "Test", original, nil)
 	Maximize(w, testWorkArea)
-	Restore(w)
+	Restore(w, testWorkArea)
 
 	if w.Rect != original {
 		t.Errorf("Restore: %v, want %v", w.Rect, original)
@@ -72,7 +72,7 @@ func TestRestore(t *testing.T) {
 func TestRestoreWhenNotMaximized(t *testing.T) {
 	original := geometry.Rect{X: 20, Y: 10, Width: 40, Height: 20}
 	w := NewWindow("w1", "Test", original, nil)
-	Restore(w) // should be no-op
+	Restore(w, testWorkArea) // should be no-op
 	if w.Rect != original {
 		t.Error("restore on non-maximized should not change rect")
 	}
@@ -562,5 +562,37 @@ func TestCascadeVeryTinyWorkArea(t *testing.T) {
 	}
 	if w2.Rect.X != 0 || w2.Rect.Y != 0 {
 		t.Errorf("very tiny cascade w2: (%d, %d), want (0, 0)", w2.Rect.X, w2.Rect.Y)
+	}
+}
+
+func TestRestoreReturnsToSnap(t *testing.T) {
+	w := NewWindow("w1", "Test", geometry.Rect{X: 5, Y: 5, Width: 40, Height: 20}, nil)
+	SnapLeft(w, testWorkArea)
+	Maximize(w, testWorkArea)
+
+	bigger := geometry.Rect{X: 0, Y: 1, Width: testWorkArea.Width * 2, Height: testWorkArea.Height}
+	Restore(w, bigger)
+	if want := SnapRect(SnapLeftHalf, bigger); w.Rect != want {
+		t.Errorf("Restore = %v, want snapped %v", w.Rect, want)
+	}
+}
+
+func TestToggleMaximizePromotesAutoMaximized(t *testing.T) {
+	w := NewWindow("w1", "Test", geometry.Rect{X: 5, Y: 5, Width: 40, Height: 20}, nil)
+	Maximize(w, testWorkArea)
+	w.AutoMaximized = true
+
+	ToggleMaximize(w, testWorkArea)
+	if !w.IsMaximized() || w.AutoMaximized {
+		t.Errorf("want explicit maximize, got max=%v auto=%v", w.IsMaximized(), w.AutoMaximized)
+	}
+}
+
+func TestMoveClearsSnap(t *testing.T) {
+	w := NewWindow("w1", "Test", geometry.Rect{X: 5, Y: 5, Width: 40, Height: 20}, nil)
+	SnapRight(w, testWorkArea)
+	MoveWindow(w, -MoveStep, 0, testWorkArea)
+	if w.Snap != SnapNone {
+		t.Errorf("Snap = %v after move, want none", w.Snap)
 	}
 }

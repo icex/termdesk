@@ -311,6 +311,33 @@ func TestPreMaxRectRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSnapAndAutoMaximizedRoundTrip(t *testing.T) {
+	state := WorkspaceState{
+		Version: 1,
+		SavedAt: time.Now(),
+		Windows: []WindowState{
+			{
+				ID: "win-1", Title: "Phone", Command: "/bin/sh",
+				Width: 45, Height: 28,
+				PreMaxRect:    &geometry.Rect{X: 60, Y: 1, Width: 60, Height: 38},
+				AutoMaximized: true,
+				Snap:          "right",
+			},
+			{ID: "win-2", Title: "Free", Command: "/bin/sh", Width: 40, Height: 10},
+		},
+	}
+
+	var parsed WorkspaceState
+	parseWorkspace(&parsed, serializeWorkspace(state))
+
+	if w := parsed.Windows[0]; !w.AutoMaximized || w.Snap != "right" {
+		t.Errorf("win-1: AutoMaximized=%v Snap=%q, want true \"right\"", w.AutoMaximized, w.Snap)
+	}
+	if w := parsed.Windows[1]; w.AutoMaximized || w.Snap != "" {
+		t.Errorf("win-2: AutoMaximized=%v Snap=%q, want false \"\"", w.AutoMaximized, w.Snap)
+	}
+}
+
 func TestSaveLoadWorkspace(t *testing.T) {
 	dir := t.TempDir()
 

@@ -462,7 +462,7 @@ func (m Model) handleMouseClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 
 	case window.HitMaxButton:
 		if w.Resizable {
-			if !w.IsMaximized() {
+			if !w.IsMaximized() || w.AutoMaximized {
 				m.disablePersistentTiling()
 			}
 			from := w.Rect
@@ -970,14 +970,21 @@ func (m Model) handleMouseMotion(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// A tap often reports motion without moving (touch screens over ssh);
+	// only a real drag may un-maximize or un-snap the window.
+	if p == m.drag.StartMouse {
+		return m, nil
+	}
+
 	// Un-maximize on drag move
 	if m.drag.Mode == window.DragMove && w.IsMaximized() {
-		window.Restore(w)
+		window.Restore(w, m.wm.WorkArea())
 		m.drag.StartRect = w.Rect
 	}
 
 	newRect := window.ApplyDrag(m.drag, p, m.wm.WorkArea())
 	w.Rect = newRect
+	w.Snap = window.SnapNone
 
 	return m, nil
 }

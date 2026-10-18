@@ -91,6 +91,14 @@ func (m *Model) animateTileMaximized() { m.animateLayout(AnimMaximize, window.Ma
 
 func (m *Model) applyTilingLayout() {
 	m.tilingLayout = normalizeTilingLayout(m.tilingLayout)
+	if m.wm.Compact() {
+		// No room for tiles; ClampAllWindows keeps everything maximized and
+		// the next non-compact resize re-tiles.
+		m.wm.ClampAllWindows()
+		m.updateDockReserved()
+		m.resizeAllTerminals()
+		return
+	}
 	if m.animationsOn {
 		switch m.tilingLayout {
 		case "rows":
@@ -284,6 +292,7 @@ func (m Model) swapFocusedWindow(dir swapDirection) Model {
 	fromA := fw.Rect
 	fromB := other.Rect
 	fw.Rect, other.Rect = fromB, fromA
+	fw.Snap, other.Snap = other.Snap, fw.Snap
 	m.startWindowAnimation(fw.ID, AnimTile, fromA, fw.Rect)
 	m.startWindowAnimation(other.ID, AnimTile, fromB, other.Rect)
 	m.resizeTerminalForWindow(fw)
@@ -310,10 +319,11 @@ func (m *Model) showDesktop() {
 
 // maximizeFocusedWindow maximizes the currently focused window.
 func (m *Model) maximizeFocusedWindow() {
-	if fw := m.wm.FocusedWindow(); fw != nil && fw.Resizable && !fw.IsMaximized() {
+	if fw := m.wm.FocusedWindow(); fw != nil && fw.Resizable && (!fw.IsMaximized() || fw.AutoMaximized) {
 		m.disablePersistentTiling()
 		from := fw.Rect
 		window.Maximize(fw, m.wm.WorkArea())
+		fw.AutoMaximized = false
 		m.startWindowAnimation(fw.ID, AnimMaximize, from, fw.Rect)
 		m.resizeTerminalForWindow(fw)
 	}

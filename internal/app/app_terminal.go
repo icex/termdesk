@@ -270,6 +270,12 @@ func (m *Model) createTerminalWindow(opts TerminalWindowOpts) tea.Cmd {
 	win.ThemeOverride = opts.ThemeOverride
 	if opts.Maximized {
 		win.PreMaxRect = &geometry.Rect{X: wa.X + 10, Y: wa.Y + 5, Width: 80, Height: 24}
+	} else if !opts.FixedSize && m.wm.Compact() {
+		// No room for windows: open full-size, restore to the cascade rect
+		// once the screen is big enough.
+		window.Maximize(win, wa)
+		win.AutoMaximized = true
+		finalRect = win.Rect
 	}
 	if opts.FixedSize {
 		win.Resizable = false

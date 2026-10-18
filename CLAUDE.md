@@ -125,6 +125,20 @@ apps/
 - Regular windows are visually dimmed while the quake is visible.
 - Impl: `app_terminal.go` (lifecycle) + `render_quake.go` (rendering).
 
+## Window layout on resize
+
+- Layout state lives on the window: `PreMaxRect` (maximized), `Snap` (left/right/top/bottom
+  half), `AutoMaximized`. `ClampAllWindows()` / `window.Fit()` re-derive rects from that
+  state on every `WindowSizeMsg`, so maximized and snapped windows follow the host size
+  (e.g. phone attaches, then desktop reattaches to the same session).
+- Anything that places a window freely (move, resize, tile, cascade, drag) must call
+  `unpin()` / clear `Snap`, or the next resize snaps it back.
+- Compact mode (`Manager.Compact()`, screen < 80×20): every resizable window is
+  auto-maximized; leaving compact restores them. Maximize on an auto-maximized window
+  promotes it to a real maximize so it stays full-size on the bigger screen.
+- Drag motion at the click position is ignored — touch taps send it, and it used to
+  un-maximize the window.
+
 ## Split panes
 
 - Tmux-style binary tree inside a window. `SplitRoot` + `FocusedPane` on the window.
